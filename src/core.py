@@ -1,6 +1,7 @@
 import pywt
 import numpy as np
 from PIL import Image
+from scipy.fftpack import dct, idct
 
 # --- HELPER FUNCTIONS ---
 
@@ -21,14 +22,14 @@ def binary_to_text(binary):
             pass
     return "".join(chars)
 
-# --- DWT-SVD ENGINE (BLOCK BASED) ---
+# --- DWT-DCT-SVD ENGINE (BLOCK BASED) ---
 
 def embed_watermark(image_array, watermark_text, alpha=50, username="default"):
     """
-    Embeds watermark using Block-Based DWT-SVD.
+    Embeds watermark using Hybrid Block-Based DWT-DCT-SVD.
     1. DWT Level 1 -> LL Subband.
     2. Divide LL into 4x4 blocks.
-    3. For each block: SVD -> Embed bit in S[0].
+    3. For each block: DCT -> SVD -> Embed bit in S[0].
     """
     # 1. Convert to YCbCr and extract Y
     img_pil = Image.fromarray(image_array.astype('uint8')).convert('YCbCr')
@@ -64,27 +65,32 @@ def embed_watermark(image_array, watermark_text, alpha=50, username="default"):
             if msg_idx >= len(binary_msg): break
             
             block = LL[r:r+block_size, c:c+block_size]
-            U, S, Vt = np.linalg.svd(block, full_matrices=False)
+
+            # Apply DCT to the block
+            dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
+
+            # Apply SVD to DCT block
+            U, S, Vt = np.linalg.svd(dct_block, full_matrices=False)
             
             # Store original S[0] for extraction key
             s0_originals.append(float(S[0]))
             
             # Embed Bit into S[0]
             bit = int(binary_msg[msg_idx])
-            # Rule: If bit=1, add alpha. If bit=0, do nothing (or sub alpha? No, simpler is better).
-            # Let's add alpha * bit.
             S[0] = S[0] + (alpha * bit)
             
-            # Reconstruct Block
-            block_new = np.dot(U, np.dot(np.diag(S), Vt))
+            # Reconstruct DCT Block
+            dct_block_new = np.dot(U, np.dot(np.diag(S), Vt))
+
+            # Inverse DCT
+            block_new = idct(idct(dct_block_new.T, norm='ortho').T, norm='ortho')
+
             LL[r:r+block_size, c:c+block_size] = block_new
             
             msg_idx += 1
             
     # 5. Inverse DWT
     # Be careful: LL was cropped. We need to match LH, HL, HH size.
-    # Usually LH, HL, HH are same size as original LL.
-    # If we cropped LL, we must crop others too.
     LH = LH[:h, :w]; HL = HL[:h, :w]; HH = HH[:h, :w]
     
     coeffs_new = (LL, (LH, HL, HH))
@@ -95,8 +101,6 @@ def embed_watermark(image_array, watermark_text, alpha=50, username="default"):
     watermarked_y = Image.fromarray(y_watermarked)
     
     # Resize cb, cr if needed (because we cropped LL/LH..)
-    # The output image will be slightly smaller if we cropped.
-    # DWT output is usually 2x internal dims.
     out_h, out_w = y_watermarked.shape
     cb = cb.resize((out_w, out_h)); cr = cr.resize((out_w, out_h))
     
@@ -106,7 +110,7 @@ def embed_watermark(image_array, watermark_text, alpha=50, username="default"):
 
 def extract_watermark(image_array, key, alpha=50, length=None, username="default"):
     """
-    Extracts watermark using Block-Based DWT-SVD and Original S[0] Key.
+    Extracts watermark using Hybrid Block-Based DWT-DCT-SVD and Original S[0] Key.
     """
     # 1. Setup
     img_pil = Image.fromarray(image_array.astype('uint8')).convert('YCbCr')
@@ -131,7 +135,12 @@ def extract_watermark(image_array, key, alpha=50, length=None, username="default
             if idx >= len(s0_originals): break
             
             block = LL[r:r+block_size, c:c+block_size]
-            U, S, Vt = np.linalg.svd(block, full_matrices=False)
+
+            # Apply DCT to the block
+            dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
+
+            # Apply SVD to DCT block
+            U, S, Vt = np.linalg.svd(dct_block, full_matrices=False)
             
             s_extracted = S[0]
             s_original = s0_originals[idx]
