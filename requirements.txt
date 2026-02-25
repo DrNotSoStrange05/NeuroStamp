@@ -10,3 +10,4 @@ sqlalchemy
 passlib[bcrypt]
 cryptography
 jinja2
+Pillow
