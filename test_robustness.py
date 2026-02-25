@@ -14,7 +14,7 @@ def test():
         print(f"❌ Error: {input_path} not found.")
         return
 
-    print(f"--- TESTING DWT-SVD ROBUSTNESS (Msg: {secret_msg}) ---")
+    print(f"--- TESTING DWT-DCT-SVD ROBUSTNESS (Msg: {secret_msg}) ---")
     
     # 1. Embed
     original = load_image(input_path)
@@ -44,6 +44,20 @@ def test():
     
     extracted_noise = extract_watermark(load_image("test_noise.png"), key, alpha, len(secret_msg)*8)
     print(f"[>] Noise (Sigma=15) Extraction: {repr(extracted_noise)} -> {'PASS' if extracted_noise == secret_msg else 'FAIL'}")
+
+    # 5. Scaling Attack (50% -> 100%)
+    w, h = img_wm.size
+    scaled_down = img_wm.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+    scaled_up = scaled_down.resize((w, h), Image.Resampling.LANCZOS)
+    scaled_up.save("test_scaled.png")
+
+    # Note: load_image might trim if dimensions are odd, but here we resized back to w, h which came from img_wm (which was likely trimmed/even).
+    # Ideally we should ensure scaled_up matches the dimensions expected by extraction (which is based on the key, but extraction doesn't check key length vs image size strictly, it loops).
+    # But extraction relies on block alignment. Resizing back to original size is crucial.
+
+    extracted_scaled = extract_watermark(load_image("test_scaled.png"), key, alpha, len(secret_msg)*8)
+    print(f"[>] Scaling (50% -> 100%) Extraction: {repr(extracted_scaled)} -> {'PASS' if extracted_scaled == secret_msg else 'FAIL'}")
+
 
 if __name__ == "__main__":
     test()
