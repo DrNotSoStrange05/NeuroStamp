@@ -47,23 +47,6 @@ def binary_to_text(binary):
                 pass
     return text
 
-def get_scrambled_indices(length, seed_key):
-    """
-    Generates a list of unique indices from 0 to length-1,
-    shuffled deterministically based on the seed_key.
-    """
-    indices = list(range(length))
-    
-    if isinstance(seed_key, str):
-        seed = sum(ord(c) for c in seed_key)
-    else:
-        seed = sum(seed_key) if isinstance(seed_key, list) else int(seed_key)
-        
-    random.seed(seed)
-    random.shuffle(indices)
-    
-    return indices
-
 def compute_dhash(image_array):
     """
     Generates a 'Perceptual Hash' of the image.
@@ -95,8 +78,6 @@ def compute_dhash(image_array):
     hex_hash = hex(decimal_val)[2:] # Strip '0x'
     
     return hex_hash
-
-# ... keep existing imports ...
 
 def hex_to_binary(hex_str):
     """Helper to convert Hex string to Binary string"""

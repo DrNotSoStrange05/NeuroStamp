@@ -27,6 +27,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 init_db()
 
+def get_secure_filename(filename: str) -> str:
+    """
+    Generates a secure filename by prepending a UUID and sanitizing the original name.
+    """
+    base = os.path.basename(filename)
+    # Simple sanitization: keep only alphanumeric, dots, dashes, underscores
+    clean_base = "".join(c for c in base if c.isalnum() or c in "._-")
+    return f"{uuid.uuid4().hex[:8]}_{clean_base}"
+
 # FIX: Proper indentation for database session
 def get_db():
     db = SessionLocal()
@@ -75,7 +84,8 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
     if not user: return {"error": "User error. Relogin."}
 
     # Save & Load
-    path = f"static/uploads/{file.filename}"
+    secure_name = get_secure_filename(file.filename)
+    path = f"static/uploads/{secure_name}"
     with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
     original = load_image(path)
     
@@ -96,7 +106,7 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
     db.commit()
     
     # Save Output
-    out_name = f"stamped_{file.filename}"
+    out_name = f"stamped_{secure_name}"
     save_image(watermarked, f"static/uploads/{out_name}")
     return {"status": "success", "download_url": f"/static/uploads/{out_name}"}
 
@@ -106,7 +116,8 @@ async def verify(username: str = Form(...), file: UploadFile = File(...), db: Se
     key = user.get_key_data() if user else None
     if not key: return {"error": "User/Key not found."}
     
-    path = f"static/uploads/verify_{file.filename}"
+    secure_name = get_secure_filename(file.filename)
+    path = f"static/uploads/verify_{secure_name}"
     with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
     
     # Extract
@@ -116,7 +127,10 @@ async def verify(username: str = Form(...), file: UploadFile = File(...), db: Se
 
 @app.post("/attack")
 async def attack(filename: str = Form(...), attack_type: str = Form(...)):
-    path = f"static/uploads/{filename}"
+    # Sanitize filename (ensure just basename)
+    safe_filename = os.path.basename(filename)
+    path = f"static/uploads/{safe_filename}"
+
     if not os.path.exists(path): return {"error": "File not found"}
     img = Image.open(path).convert("RGB")
     
@@ -129,7 +143,7 @@ async def attack(filename: str = Form(...), attack_type: str = Form(...)):
     elif attack_type == "rotate": img = img.rotate(5)
     elif attack_type == "crop": img = img.crop((img.width*0.1, img.height*0.1, img.width*0.9, img.height*0.9))
         
-    out = f"attacked_{attack_type}_{filename}"
+    out = f"attacked_{attack_type}_{safe_filename}"
     img.save(f"static/uploads/{out}")
     return {"status": "success", "attack_url": f"/static/uploads/{out}"}
 
@@ -255,7 +269,8 @@ from src.visualizer import generate_visualizations, generate_diff_map
 async def process_visualization(username: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
     # 1. Save Original
     os.makedirs("static/vis", exist_ok=True)
-    file_path = f"static/vis/demo_original_{uuid.uuid4().hex[:8]}.jpg"
+    unique_id = uuid.uuid4().hex[:8]
+    file_path = f"static/vis/demo_original_{unique_id}.jpg"
     with open(file_path, "wb") as f: shutil.copyfileobj(file.file, f)
     
     # 2. Generate Watermarked Version
@@ -267,10 +282,10 @@ async def process_visualization(username: str = Form(...), file: UploadFile = Fi
     save_image(wm_img, wm_path)
     
     # 3. Generate Visualizations (DWT, Grid, SVD)
-    vis_assets = generate_visualizations(file_path, "static/vis")
+    vis_assets = generate_visualizations(file_path, "static/vis", unique_id)
     
     # 4. Generate Diff Map
-    vis_diff = generate_diff_map(file_path, wm_path, "static/vis")
+    vis_diff = generate_diff_map(file_path, wm_path, "static/vis", unique_id)
     
     return templates.TemplateResponse("visualize.html", {
         "request": {},

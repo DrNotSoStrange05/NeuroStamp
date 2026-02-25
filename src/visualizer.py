@@ -5,7 +5,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 
-def generate_visualizations(image_path, output_dir):
+def generate_visualizations(image_path, output_dir, unique_id="demo"):
     """
     Generates 4 visualization assets from the input image:
     1. DWT Decomposition (4-panel)
@@ -36,7 +36,8 @@ def generate_visualizations(image_path, output_dir):
         np.hstack([norm(LL), norm(LH)]),
         np.hstack([norm(HL), norm(HH)])
     ])
-    dwt_path = f"{output_dir}/vis_dwt.jpg"
+    dwt_filename = f"{unique_id}_vis_dwt.jpg"
+    dwt_path = f"{output_dir}/{dwt_filename}"
     cv2.imwrite(dwt_path, vis_dwt)
     
     # 2. Block Grid Overlay on LL
@@ -52,7 +53,8 @@ def generate_visualizations(image_path, output_dir):
     for x in range(0, w_ll, block_size):
         cv2.line(LL_color, (x, 0), (x, h_ll), (0, 255, 0), 1)
         
-    grid_path = f"{output_dir}/vis_grid.jpg"
+    grid_filename = f"{unique_id}_vis_grid.jpg"
+    grid_path = f"{output_dir}/{grid_filename}"
     cv2.imwrite(grid_path, LL_color)
     
     # 3. SVD Heatmap (S[0] Energy)
@@ -75,16 +77,17 @@ def generate_visualizations(image_path, output_dir):
     heatmap_norm = norm(energy_map)
     heatmap_color = cv2.applyColorMap(heatmap_norm, cv2.COLORMAP_JET)
     
-    svd_path = f"{output_dir}/vis_svd.jpg"
+    svd_filename = f"{unique_id}_vis_svd.jpg"
+    svd_path = f"{output_dir}/{svd_filename}"
     cv2.imwrite(svd_path, heatmap_color)
     
     return {
-        "dwt": "/static/vis/vis_dwt.jpg",
-        "grid": "/static/vis/vis_grid.jpg",
-        "svd": "/static/vis/vis_svd.jpg"
+        "dwt": f"/static/vis/{dwt_filename}",
+        "grid": f"/static/vis/{grid_filename}",
+        "svd": f"/static/vis/{svd_filename}"
     }
 
-def generate_diff_map(original_path, watermarked_path, output_dir):
+def generate_diff_map(original_path, watermarked_path, output_dir, unique_id="demo"):
     """
     Generates difference map between Original and Watermarked.
     """
@@ -103,7 +106,8 @@ def generate_diff_map(original_path, watermarked_path, output_dir):
     diff = diff * 50.0 
     diff = np.clip(diff, 0, 255).astype(np.uint8)
     
-    diff_path = f"{output_dir}/vis_diff.jpg" # Absolute path
+    diff_filename = f"{unique_id}_vis_diff.jpg"
+    diff_path = f"{output_dir}/{diff_filename}" # Absolute path
     cv2.imwrite(diff_path, cv2.cvtColor(diff, cv2.COLOR_RGB2BGR))
     
-    return "/static/vis/vis_diff.jpg" # Web path
+    return f"/static/vis/{diff_filename}" # Web path
