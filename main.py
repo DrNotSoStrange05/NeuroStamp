@@ -120,9 +120,37 @@ async def verify(username: str = Form(...), file: UploadFile = File(...), db: Se
     path = f"static/uploads/verify_{secure_name}"
     with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
     
-    # Extract
-    text = extract_watermark(load_image(path), key, 40, len(f"ID:{user.user_uid}")*8, username)
-    is_match = (text == f"ID:{user.user_uid}")
+    # Extract (extract 15 characters = 120 bits)
+    text = extract_watermark(load_image(path), key, 40, 120, username)
+    print(f"DEBUG - Expected: 'ID:{user.user_uid}'")
+    print(f"DEBUG - Extracted: '{text}'")
+    
+    # Calculate Hamming distance between the expected text and extracted text
+    expected = f"ID:{user.user_uid}"
+    
+    # We allow a small error margin (e.g., 2 characters / 16 bits of noise difference)
+    # Convert both to binary and calculate bit differences
+    from src.utils import text_to_binary
+    
+    is_match = False
+    if text == expected:
+        is_match = True
+    else:
+        bin_extracted = text_to_binary(text)
+        bin_expected = text_to_binary(expected)
+        
+        # Ensure we always measure the full expected length even if extracted is shorter
+        bin_extracted = bin_extracted.ljust(len(bin_expected), '0')
+        bin_extracted = bin_extracted[:len(bin_expected)]
+        
+        diff_bits = sum(1 for a, b in zip(bin_extracted, bin_expected) if a != b)
+        
+        print(f"DEBUG - Bits different: {diff_bits}")
+        # If less than 16 bits (2 characters' worth) are wrong, consider it a match
+        # We increase tolerance slightly since Blur/Scaling are heavily destructive
+        if diff_bits <= 16:
+            is_match = True
+            
     return {"status": "complete", "extracted_text": text, "is_match": is_match, "owner": username if is_match else "Unknown"}
 
 @app.post("/attack")
@@ -142,6 +170,10 @@ async def attack(filename: str = Form(...), attack_type: str = Form(...)):
         img.save(f"{path}.jpg", "JPEG", quality=50); img = Image.open(f"{path}.jpg")
     elif attack_type == "rotate": img = img.rotate(5)
     elif attack_type == "crop": img = img.crop((img.width*0.1, img.height*0.1, img.width*0.9, img.height*0.9))
+    elif attack_type == "scale":
+        w, h = img.size
+        scaled_down = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+        img = scaled_down.resize((w, h), Image.Resampling.LANCZOS)
         
     out = f"attacked_{attack_type}_{safe_filename}"
     img.save(f"static/uploads/{out}")

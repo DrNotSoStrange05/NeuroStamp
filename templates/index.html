@@ -1,18 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NeuroStamp | Secure Watermarking</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@500;700&display=swap"
+        rel="stylesheet">
+
     <style>
         :root {
             --bg-color: #050505;
             --card-bg: rgba(20, 20, 20, 0.7);
-            --primary-neon: #00ff9d; /* Matrix Green */
-            --secondary-neon: #00d2ff; /* Cyber Blue */
+            --primary-neon: #00ff9d;
+            /* Matrix Green */
+            --secondary-neon: #00d2ff;
+            /* Cyber Blue */
             --danger-neon: #ff0055;
             --text-color: #e0e0e0;
         }
@@ -29,15 +34,25 @@
         body::before {
             content: "";
             position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             background: linear-gradient(rgba(0, 255, 157, 0.03) 1px, transparent 1px),
-                        linear-gradient(90deg, rgba(0, 255, 157, 0.03) 1px, transparent 1px);
+                linear-gradient(90deg, rgba(0, 255, 157, 0.03) 1px, transparent 1px);
             background-size: 30px 30px;
             z-index: -1;
             pointer-events: none;
         }
 
-        h1, h2, h3, h4, h5 { font-family: 'JetBrains Mono', monospace; letter-spacing: -1px; }
+        h1,
+        h2,
+        h3,
+        h4,
+        h5 {
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -1px;
+        }
 
         /* --- Glassmorphism Cards --- */
         .card {
@@ -48,6 +63,7 @@
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
+
         .card:hover {
             transform: translateY(-5px);
             box-shadow: 0 0 15px rgba(0, 255, 157, 0.2);
@@ -61,14 +77,17 @@
             color: var(--primary-neon);
             font-family: 'JetBrains Mono', monospace;
         }
+
         .form-control:focus {
             background: rgba(0, 0, 0, 0.8);
             border-color: var(--primary-neon);
             color: white;
             box-shadow: 0 0 10px rgba(0, 255, 157, 0.3);
         }
-        
-        .form-control::placeholder { color: rgba(0, 255, 157, 0.3); }
+
+        .form-control::placeholder {
+            color: rgba(0, 255, 157, 0.3);
+        }
 
         .btn-cyber {
             background: transparent;
@@ -79,6 +98,7 @@
             font-weight: bold;
             transition: all 0.2s;
         }
+
         .btn-cyber:hover {
             background: var(--primary-neon);
             color: black;
@@ -89,6 +109,7 @@
             border-color: var(--danger-neon);
             color: var(--danger-neon);
         }
+
         .btn-danger-cyber:hover {
             background: var(--danger-neon);
             color: white;
@@ -104,21 +125,37 @@
             font-family: 'JetBrains Mono', monospace;
             color: #ccc;
             margin-top: 20px;
-            display: none; 
+            display: none;
         }
+
         .scan-line {
-            width: 100%; height: 2px; background: var(--primary-neon);
-            animation: scan 2s infinite linear; opacity: 0.5;
+            width: 100%;
+            height: 2px;
+            background: var(--primary-neon);
+            animation: scan 2s infinite linear;
+            opacity: 0.5;
         }
-        @keyframes scan { 0% { transform: translateY(0); } 100% { transform: translateY(100px); opacity: 0; } }
+
+        @keyframes scan {
+            0% {
+                transform: translateY(0);
+            }
+
+            100% {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+        }
     </style>
 </head>
+
 <body class="py-5">
 
     <div class="container">
-        
+
         <div class="text-center mb-5">
-            <h1 class="display-3 fw-bold" style="color: var(--primary-neon);">NEURO<span style="color: white;">STAMP</span>_v1.0</h1>
+            <h1 class="display-3 fw-bold" style="color: var(--primary-neon);">NEURO<span
+                    style="color: white;">STAMP</span>_v1.0</h1>
             <p class="lead text-muted">SECURE DWT WATERMARKING PROTOCOL</p>
             <a href="/db-viewer" class="btn btn-sm btn-outline-light mt-2" style="border-radius: 20px; opacity: 0.7;">
                 📂 ACCESS ENCRYPTED DATABASE
@@ -126,12 +163,12 @@
         </div>
 
         <div class="row g-4">
-            
+
             <div class="col-md-4">
                 <div class="card h-100 p-4">
                     <h4 class="mb-3" style="color: var(--secondary-neon);">01 // ACTIVE SESSION</h4>
                     <p class="small text-muted">Identity Authenticated.</p>
-                    
+
                     <div class="alert border border-success bg-success bg-opacity-10 text-success text-center">
                         <span style="font-size: 2rem;">👤</span>
                         <h5 class="font-monospace mb-0 mt-2">{{ username }}</h5>
@@ -148,7 +185,7 @@
                 <div class="card h-100 p-4">
                     <h4 class="mb-3" style="color: var(--primary-neon);">02 // EMBED WATERMARK</h4>
                     <p class="small text-muted">Inject Bipolar DWT Signal.</p>
-                    
+
                     <form id="stampForm" onsubmit="handleStamp(event)">
                         <input type="file" class="form-control mb-3" id="stampFile" required>
                         <button type="submit" class="btn btn-cyber w-100">EXECUTE STAMP</button>
@@ -159,13 +196,20 @@
                     <div class="mt-4 border-top border-secondary pt-3">
                         <h6 class="text-danger small fw-bold">⚠️ ATTACK SIMULATION LAB</h6>
                         <div class="d-flex gap-2 mb-2">
-                            <button onclick="attack('noise')" class="btn btn-sm btn-outline-danger flex-fill">NOISE</button>
-                            <button onclick="attack('blur')" class="btn btn-sm btn-outline-warning flex-fill">BLUR</button>
-                            <button onclick="attack('jpeg')" class="btn btn-sm btn-outline-secondary flex-fill">JPEG</button>
+                            <button onclick="attack('noise')"
+                                class="btn btn-sm btn-outline-danger flex-fill">NOISE</button>
+                            <button onclick="attack('blur')"
+                                class="btn btn-sm btn-outline-warning flex-fill">BLUR</button>
+                            <button onclick="attack('jpeg')"
+                                class="btn btn-sm btn-outline-secondary flex-fill">JPEG</button>
                         </div>
                         <div class="d-flex gap-2">
-                            <button onclick="attack('rotate')" class="btn btn-sm btn-outline-light flex-fill">ROT 5°</button>
-                            <button onclick="attack('crop')" class="btn btn-sm btn-outline-light flex-fill">CROP</button>
+                            <button onclick="attack('rotate')" class="btn btn-sm btn-outline-light flex-fill">ROT
+                                5°</button>
+                            <button onclick="attack('crop')"
+                                class="btn btn-sm btn-outline-light flex-fill">CROP</button>
+                            <button onclick="attack('scale')" class="btn btn-sm btn-outline-info flex-fill">SCALE
+                                50%</button>
                         </div>
                         <div id="attackResult" class="mt-2 small text-warning font-monospace"></div>
                     </div>
@@ -176,9 +220,10 @@
                 <div class="card h-100 p-4">
                     <h4 class="mb-3" style="color: #ff0055;">03 // VERIFY ASSET</h4>
                     <p class="small text-muted">Decrypt & validate ownership.</p>
-                    
+
                     <form id="verifyForm" onsubmit="handleVerify(event)">
-                        <input type="text" class="form-control mb-2" id="verifyUser" placeholder="CLAIMED OWNER" required>
+                        <input type="text" class="form-control mb-2" id="verifyUser" placeholder="CLAIMED OWNER"
+                            required>
                         <input type="file" class="form-control mb-3" id="verifyFile" required>
                         <button type="submit" class="btn btn-danger-cyber w-100">RUN DIAGNOSTIC</button>
                     </form>
@@ -193,13 +238,13 @@
 
     <script>
         // --- AUTO-DETECT USER FROM BACKEND ---
-        const CURRENT_USER = "{{ username }}"; 
+        const CURRENT_USER = "{{ username }}";
         let currentStampedFilename = "";
 
         async function handleStamp(e) {
             e.preventDefault();
             const formData = new FormData();
-            
+
             // AUTOMATICALLY ATTACH THE LOGGED-IN USERNAME
             formData.append('username', CURRENT_USER);
             formData.append('file', document.getElementById('stampFile').files[0]);
@@ -212,8 +257,8 @@
             try {
                 const res = await fetch('/stamp', { method: 'POST', body: formData });
                 const data = await res.json();
-                
-                if(data.status === 'success') {
+
+                if (data.status === 'success') {
                     currentStampedFilename = data.download_url.split('/').pop();
                     document.getElementById('stampResult').innerHTML = `
                         <a href="${data.download_url}" class="btn btn-success w-100 mb-2" download>
@@ -305,4 +350,5 @@
         }
     </script>
 </body>
+
 </html>
