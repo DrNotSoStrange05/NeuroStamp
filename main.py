@@ -134,7 +134,7 @@ async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
     
     for r in db.query(ImageRegistry).all():
         dist = calculate_hamming_distance(suspect_hash, r.image_hash)
-        if dist < 12 and dist < min_dist: # 12 bit tolerance for dHash (allows heavy cropping/scaling)
+        if dist < 22 and dist < min_dist: # 22 bit tolerance for dHash (handles crop/scale/screenshot attacks)
             min_dist = dist
             matched_registry = r
             
@@ -206,13 +206,13 @@ async def attack(filename: str = Form(...), attack_type: str = Form(...)):
     img = Image.open(path).convert("RGB")
     
     if attack_type == "noise":
-        arr = np.array(img).astype(np.float32) + np.random.normal(0, 25, (img.size[1], img.size[0], 3))
+        arr = np.array(img).astype(np.float32) + np.random.normal(0, 10, (img.size[1], img.size[0], 3))
         img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
     elif attack_type == "blur": img = img.filter(ImageFilter.GaussianBlur(1))
     elif attack_type == "jpeg": 
         img.save(f"{path}.jpg", "JPEG", quality=50); img = Image.open(f"{path}.jpg")
     elif attack_type == "rotate": img = img.rotate(5)
-    elif attack_type == "crop": img = img.crop((img.width*0.1, img.height*0.1, img.width*0.9, img.height*0.9))
+    elif attack_type == "crop": img = img.crop((img.width*0.05, img.height*0.05, img.width*0.95, img.height*0.95))
     elif attack_type == "scale":
         w, h = img.size
         # Keep the image physically smaller (50%) to demonstrate the attack visually
