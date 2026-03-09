@@ -57,6 +57,8 @@ class ImageRegistry(Base):
     id = Column(Integer, primary_key=True, index=True)
     image_hash = Column(String, unique=True, index=True)
     owner_uid = Column(String)
+    original_width = Column(Integer, default=0)
+    original_height = Column(Integer, default=0)
 
 def init_db():
     Base.metadata.create_all(bind=engine)

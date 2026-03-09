@@ -102,7 +102,13 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
     
     # Register
     if not db.query(ImageRegistry).filter_by(image_hash=img_hash).first():
-        db.add(ImageRegistry(image_hash=img_hash, owner_uid=user.user_uid))
+        h, w, c = original.shape
+        db.add(ImageRegistry(
+            image_hash=img_hash, 
+            owner_uid=user.user_uid,
+            original_width=w,
+            original_height=h
+        ))
     db.commit()
     
     # Save Output
@@ -111,25 +117,58 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
     return {"status": "success", "download_url": f"/static/uploads/{out_name}"}
 
 @app.post("/verify")
-async def verify(username: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    key = user.get_key_data() if user else None
-    if not key: return {"error": "User/Key not found."}
-    
+async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # 1. Save uploaded file securely
     secure_name = get_secure_filename(file.filename)
     path = f"static/uploads/verify_{secure_name}"
     with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
     
-    # Extract (extract 15 characters = 120 bits)
-    text = extract_watermark(load_image(path), key, 40, 120, username)
+    # 2. Load the suspected image
+    suspect_img_arr = load_image(path)
+    
+    # 3. Autonomous Pirate Detection (dHash Search)
+    suspect_hash = compute_dhash(suspect_img_arr)
+    
+    matched_registry = None
+    min_dist = 100
+    
+    for r in db.query(ImageRegistry).all():
+        dist = calculate_hamming_distance(suspect_hash, r.image_hash)
+        if dist < 12 and dist < min_dist: # 12 bit tolerance for dHash (allows heavy cropping/scaling)
+            min_dist = dist
+            matched_registry = r
+            
+    if not matched_registry:
+        return {"status": "error", "error": "No matching copyright found in the NeuroStamp Global Registry."}
+        
+    # 4. We found the owner! Load their profile.
+    user = db.query(User).filter(User.user_uid == matched_registry.owner_uid).first()
+    if not user: return {"error": "Registry Corrupted: Owner UID missing."}
+    
+    key = user.get_key_data()
+    if not key: return {"error": "User Key not found."}
+    
+    # 5. RECOVERY ALIGNMENT
+    # If the image was squashed by Instagram, we must resize it back to the mathematically
+    # expected DWT grid dimensions before extraction!
+    orig_w = matched_registry.original_width
+    orig_h = matched_registry.original_height
+    
+    h, w, c = suspect_img_arr.shape
+    if orig_w > 0 and orig_h > 0 and (w != orig_w or h != orig_h):
+        print(f"   [ALIGNMENT] Restoring dimensions from {w}x{h} back to {orig_w}x{orig_h}")
+        pil_img = Image.fromarray(suspect_img_arr)
+        pil_img = pil_img.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+        suspect_img_arr = np.array(pil_img)
+    
+    # 6. Extract the 120-bit Bipolar DCT Signature
+    text = extract_watermark(suspect_img_arr, key, 40, 120, user.username)
     print(f"DEBUG - Expected: 'ID:{user.user_uid}'")
     print(f"DEBUG - Extracted: '{text}'")
     
-    # Calculate Hamming distance between the expected text and extracted text
+    # 7. Signature Integrity Validation
     expected = f"ID:{user.user_uid}"
     
-    # We allow a small error margin (e.g., 2 characters / 16 bits of noise difference)
-    # Convert both to binary and calculate bit differences
     from src.utils import text_to_binary
     
     is_match = False
@@ -139,19 +178,23 @@ async def verify(username: str = Form(...), file: UploadFile = File(...), db: Se
         bin_extracted = text_to_binary(text)
         bin_expected = text_to_binary(expected)
         
-        # Ensure we always measure the full expected length even if extracted is shorter
-        bin_extracted = bin_extracted.ljust(len(bin_expected), '0')
-        bin_extracted = bin_extracted[:len(bin_expected)]
+        # Format padding
+        bin_extracted = bin_extracted.ljust(len(bin_expected), '0')[:len(bin_expected)]
         
         diff_bits = sum(1 for a, b in zip(bin_extracted, bin_expected) if a != b)
-        
         print(f"DEBUG - Bits different: {diff_bits}")
-        # If less than 16 bits (2 characters' worth) are wrong, consider it a match
-        # We increase tolerance slightly since Blur/Scaling are heavily destructive
+        
+        # If less than 16 bits are wrong, watermark survived.
         if diff_bits <= 16:
             is_match = True
             
-    return {"status": "complete", "extracted_text": text, "is_match": is_match, "owner": username if is_match else "Unknown"}
+    return {
+        "status": "complete", 
+        # If match found, show the corrected ID from the database (not the garbled raw extraction)
+        "extracted_text": expected if is_match else text, 
+        "is_match": is_match, 
+        "owner": user.username if is_match else "Unknown"
+    }
 
 @app.post("/attack")
 async def attack(filename: str = Form(...), attack_type: str = Form(...)):
@@ -172,8 +215,8 @@ async def attack(filename: str = Form(...), attack_type: str = Form(...)):
     elif attack_type == "crop": img = img.crop((img.width*0.1, img.height*0.1, img.width*0.9, img.height*0.9))
     elif attack_type == "scale":
         w, h = img.size
-        scaled_down = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
-        img = scaled_down.resize((w, h), Image.Resampling.LANCZOS)
+        # Keep the image physically smaller (50%) to demonstrate the attack visually
+        img = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
         
     out = f"attacked_{attack_type}_{safe_filename}"
     img.save(f"static/uploads/{out}")

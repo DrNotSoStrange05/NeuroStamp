@@ -1,0 +1,104 @@
+--- PAGE 8 ---
+to 1 have a high level of perceptual quality39. Figure 6 shows the embedded watermarked cover image and the 
+extracted watermark image.
+The PSNR, MSE and SSIM of this paper’s scheme for different cover images are shown in Table 2. The average 
+PSNR and SSIM of the scheme are 45.3437 dB and 0.9987, respectively, which shows that the scheme has good 
+imperceptibility.
+Similar to PSNR, image histogram can be considered as a widely valid tool for evaluating the visual effects 
+caused by image watermarks on cover images. An image histogram shows the frequency of each intensity value 
+in an image, presenting the characteristics of the image in a more visual way. By comparing the histograms of two 
+images, their similarity can be determined. The image histogram provides a more reliable way to compare the 
+similarity which shows that the watermarking method cannot significantly alter the cover image. Figure 7 shows 
+the original cover image and the histogram of the cover image with the embedded watermark, as can be seen 
+from the figure, there is no significant difference in the histogram before and after embedding the watermark, so 
+the imperceptibility of this scheme is better.
+Table 3 compares the PSNR and SSIM metrics of our proposed scheme with the invisibility metrics of 
+other watermarking schemes. From Table 3, it can be seen that our proposed scheme has an average PSNR 
+of 45.6135dB and an average SSIM of 0.9984, indicating good invisibility. Except for references22,40, and41, 
+invisibility is superior to other schemes.
+Robustness analysis
+In this section, NCC and BER metrics are used to evaluate the robustness of the proposed scheme against various 
+attacks. A high value of NCC indicates high resistance to attacks. And lower BER indicates less watermarking 
+distortion. The robustness of any watermarking scheme is tested by various attacks which can be broadly 
+categorized as noise attack, enhancement technique attack, geometric transformation attack and compression 
+attack. Figure 8 shows the attacked cover images, and Fig. 9 shows the watermark images extracted from these 
+attacked images, where [a-l] represent: no attack, pretzel noise (v =0.05), Gaussian noise (m =0, v=0.05), speckle 
+noise (v =0.05), sharpening, Gaussian filtering, mean filtering, rotate by 10◦, flip vertically, crop by 20%, JPEG 
+compression (QF =90), JPEG 2000 compression (QF =90) and Gamma correction (gama =0.8), respectively. As 
+can be seen from Fig. 9, except for the rotation attack and the shear attack, this scheme is able to effectively Images α Images α
+Airplane 0.0234 Baboon 0.0229
+Goldhill 0.0231 House 0.0232
+Lake 0.0230 Peppers 0.0224
+Table 1 . Embedding factors for cover images. 
+Fig. 5 . Cover image and watermark image. 
+Scientific Reports  |        (2024) 14:24735 9 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
+--- PAGE 9 ---
+deal with other attacks, and the extracted watermark image has only a small amount of distortion, with good 
+robustness.
+Table 4 describes the NCC of watermark images extracted from different attacks, and Table 5 describes the 
+BER of watermark images extracted from different attacks. Under no attack conditions, the average NCC of this 
+method is 1 and the average bit error rate is 0. And under various attacks, the average NCC and average BER 
+can maintain a good level. Except for the NCC of around 0.85 in the face of rotation attacks, the NCC values 
+reach above 0.95 in the face of other attacks, indicating that this scheme has good robustness. Table 6 describes 
+Fig. 7 . Histogram comparison of carrier images. Cover image PSNR MSE SSIM
+Airplane 44.4467 2.3358 0.9980
+Baboon 45.7047 1.7483 0.9994
+Goldhill 45.4777 0.8421 0.9989
+House 45.0853 2.0163 0.9985
+Lake 45.7167 1.7435 0.9987
+Peppers 45.6135 1.7780 0.9984
+Table 2 . Imperceptibility results for different watermarked images. 
+Fig. 6 . Watermarked image and corresponding extracted watermark image. 
+Scientific Reports  |        (2024) 14:24735 10 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
+--- PAGE 10 ---
+the robustness comparison results with other watermarking schemes. Taking the Peppers cover image as an 
+example, it can be seen from Table 5 that our watermarking scheme has better robustness.
+Embedded capacity analysis
+Embedding capacity is a metric that describes the number of bits of information that can be inserted into the 
+cover image15. This scheme uses a color cover image of size 512 × 512 and a grayscale watermark image of 256 × 
+256. Therefore, the embedding capacity of this scheme is (256 × 256 × 8)/(512 × 512 × 3) = 0.6667bpp, which 
+has a high embedding capacity.
+Security analysis
+Watermark security protection is an important prerequisite to ensure the effective embedding of the watermarking 
+scheme. In this paper, we use Logistic Chaos Mapping encryption to protect the watermark, even if the attacker 
+Fig. 8 . Attacked cover image. Watermark scheme PSNR SSIM
+Proposed 45.6135 0.9984
+2036.1600 0.9976
+2133.3300 0.9985
+2251.1286 –
+2342.5503 0.9872
+2442.5503 0.9872
+2842.0200 0.9736
+4050.6200 –
+4235.7000 0.9660
+4346.8600 0.9970
+4152.2229 0.9997
+4440.4668 0.9975
+4528.6591 –
+Table 3 . Comparison of invisibility with other schemes. 
+Scientific Reports  |        (2024) 14:24735 11 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
+--- PAGE 11 ---
+Type of attack Airplane Baboon Goldhill House Lake Peppers
+No attack 1 1 1 1 1 1
+Salt and pepper noise (m = 0, v = 0.01) 0.9920 0.9968 0.9929 0.9947 0.9969 0.9951
+Salt and pepper noise (m = 0, v = 0.05) 0.9337 0.9740 0.9451 0.9508 0.9600 0.9616
+Gaussian noise (m = 0, v = 0.01) 0.9772 0.9855 0.9681 0.9812 0.9859 0.9779
+Gaussian noise (m = 0, v = 0.05) 0.8380 0.8927 0.8545 0.8746 0.8824 0.9086
+Speckle noise (m = 0, v = 0.01) 0.9841 0.9947 0.9919 0.9925 0.9968 0.9981
+Speckle noise (m = 0, v = 0.05) 0.8653 0.9643 0.9367 0.9300 0.9540 0.9812
+Sharpening 0.9733 0.8996 0.9583 0.9591 0.9429 0.9711
+Gaussian filter (3 ×3) 0.9963 0.9599 0.9933 0.9930 0.9896 0.9961
+Gaussian filter (5 ×5) 0.9932 0.9347 0.9879 0.9867 0.9806 0.9930
+Mean filter (3 ×3) 0.9948 0.9466 0.9905 0.9902 0.9852 0.9946
+Mean filter (5 ×5) 0.9818 0.8775 0.9690 0.9645 0.9496 0.9816
+Rotation (5◦) 0.8984 0.9658 0.9445 0.9315 0.9622 0.9886
+Rotation (10◦) 0.8445 0.8771 0.8463 0.8412 0.8913 0.9763
+Flip vertical 1 1 1 1 1 1
+Cropping (10%) 0.9870 0.9975 0.9979 0.9920 0.9936 0.9975
+Cropping (20%) 0.9239 0.9664 0.9831 0.9642 0.9155 0.9859
+JPEG (QF =90) 0.9988 0.9965 0.9991 0.9999 0.9996 0.9999
+JPEG2000 (QF =90) 0.9986 0.9624 0.9954 0.9968 0.9921 0.9984
+Gamma correction (gama =0.8) 0.9800 0.9748 0.9883 0.9839 0.9821 0.9860
+Table 4 . NCC of watermark images extracted from different attacks. 
+Fig. 9 . Watermark images extracted from different attacks. 
+Scientific Reports  |        (2024) 14:24735 12 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/

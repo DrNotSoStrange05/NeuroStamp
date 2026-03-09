@@ -222,8 +222,7 @@
                     <p class="small text-muted">Decrypt & validate ownership.</p>
 
                     <form id="verifyForm" onsubmit="handleVerify(event)">
-                        <input type="text" class="form-control mb-2" id="verifyUser" placeholder="CLAIMED OWNER"
-                            required>
+                        <!-- Username is no longer required due to Autonomous dHash Pipeline -->
                         <input type="file" class="form-control mb-3" id="verifyFile" required>
                         <button type="submit" class="btn btn-danger-cyber w-100">RUN DIAGNOSTIC</button>
                     </form>
@@ -281,7 +280,8 @@
         async function handleVerify(e) {
             e.preventDefault();
             const formData = new FormData();
-            formData.append('username', document.getElementById('verifyUser').value);
+
+            // Username field no longer required for Autonomous verification!
             formData.append('file', document.getElementById('verifyFile').files[0]);
 
             const resBox = document.getElementById('verifyResult');

@@ -1,0 +1,176 @@
+--- PAGE 1 ---
+of the watermark with the different characteristics of each part of the cover image, in order to solve the problem 
+of balancing the imperceptibility and robustness of digital watermarking, and to realize as much as possible 
+the lower complexity of the algorithm, and to enhance the practicality of the algorithm. In watermarking 
+schemes, the choice of embedding factor plays a vital role in balancing the imperceptibility and robustness of the 
+watermark. Most of the schemes use a single fixed embedding factor which is applicable only for fixed images but 
+if the input image is altered then it will not provide valid results. By calculating the embedding factor adaptively, 
+it ensures that the watermark image is robust and non-adaptive embedding strength makes the watermark image 
+fragile, so adaptive calculation is more beneficial to get better results10.
+Wavelet transform based watermarking is difficult to resist geometric attacks11. The limitations of wavelet 
+transform based watermarking algorithms are addressed by utilizing matrix decomposition to extract geometric 
+features of an image. Therefore, wavelet transform and matrix decomposition methods are commonly used for 
+watermarking images to avoid image manipulation and geometric attacks. Heisenberg Decomposition (HD) 
+has lower complexity, which results in more accurate cover image components and improves the robustness of 
+the embedded watermark. Many existing digital watermarking systems based on Singular Value Decomposition 
+suffer from the False Positive Problem (FPP)12, which specifies the ability to extract non-embedded or illegal 
+watermarks from cover images. A single transform cannot guarantee all the features of watermarking at the 
+same time, so mixed domain watermarking is needed to fulfill these watermarking requirements. Watermarking 
+performed in two or more transform domains is known as hybrid domain watermarking, which was developed 
+mainly to improve robustness against image processing attacks13. In addition, the color space plays an important 
+role in image watermarking. The YCbCr color space separates the luminance information (Y component) 
+from the chrominance information (Cb and Cr components). Luminance information represents the lightness 
+and darkness of the image, while chrominance information represents the color information of the image. 
+Watermarks are more likely to be hidden in the luminance information of an image, and the separation allows 
+for more targeted embedding of watermarks, reducing the impact on the overall quality of the image14.
+Literature review
+Kang et al.15 proposed a secure and robust watermarking scheme for color images, which uses Frobenius 
+paradigm and majority voting in the DWT-SVD domain in order to create zero watermarks. Experimental 
+results show that the scheme is less robust to geometric attacks. Pandey et al.16 proposed a stable, lossless, and 
+reliable hybrid color watermarking technique called lifting method and GWO, which uses Arnold transform 
+to scramble the watermark, improving security and robustness. However, compared with other color image 
+watermarking schemes, this scheme has poorer robustness. Koley17 proposed a watermarking of color images in 
+LWT domain using α-β mixing. The method embeds factors α and β according to the PC feature map by varying 
+the diagonal information coefficients of the cover image. The experimental results show that the technique is less 
+robust to JPEG compression attacks.
+Zhang, L et al.18 proposed a two-stage encryption algorithm based on Invariant Integer Wavelet (IIW) by 
+transforming the main image to frequency domain using Redistributed Invariant Integer Wavelet Transform 
+(RIIWT) and calculating the singular values of the image matrix by using QR Decomposition and Singular 
+Value Decomposition to hide the watermarks in the low and high frequencies of the cover image, which is 
+a rotationally stable scheme with low computational cost. Pandey et al.19 proposed a non-blind color image 
+watermarking scheme based on SWT and SVD, watermarking in YCbCr color space, embedding the watermark 
+through different embedding factors, and the results show that the imperceptibility of the watermarked image 
+decreases as the embedding factor increases. Vaidya P et al.20 proposed an adaptive color watermarking using 
+multiple decomposition. To embed the watermark, the embedding factor is computed adaptively using the 
+kurtosis and entropy of the color image. The experimental results show that this scheme is less imperceptible for 
+color images. Roy et al.21 proposed a color image watermarking scheme based on DWT-SVD. The watermark 
+is inserted into the Y component of the YCbCr color space. Experimental results show that the method is not 
+robust to image processing attacks.
+Abdulrahman et al.22 proposed a color image watermarking scheme based on DCT-DWT domain. After 
+performing global DCT for each color component, one level of DWT is applied to the DCT coefficients of the 
+color components. The result shows that the method is poorly robust to noise addition attacks. Prabha K et al.23 
+proposed a watermarking method for color images based on Triangular Vertex Transform (TVT) and WHT. To 
+obtain the U, V and W coefficients, the technique transforms the RGB image with TVT. Experimental results 
+show that the scheme is less robust to histogram equalization and JPEG compression attacks.
+Zhang et al.24 proposed a color image watermarking scheme using correlation of RGB color channels for 
+copyright protection. The Tucker decomposition is utilized to generate the first feature of the image, which 
+contains most of the energy of the image and the correlation between the three channels. The first feature of 
+the image is then segmented into non-overlapping blocks, and the blocks are decomposed using singular value 
+decomposition to embed the watermark in the left singular matrix. The results show that the robustness and 
+imperceptibility of this scheme are poor. Al-maweri et al.25 proposed an adaptive digital image watermarking 
+robust scheme based on DCT-DWT. Firstly, the image is converted to DCT and then wavelet transform is applied 
+to the image, the algorithm selects the best embedding factor by self-training, but the algorithm is weakly robust 
+to noise addition attacks.
+Kang X et al.26 proposed a watermarking scheme based on DWT-DCT-SVD, which uses a two-level DWT 
+transformation of the cover image to generate LH2 and HL2 sub-bands, and applies DCT to these sub-bands. 
+The watermark image to be inserted is encrypted using chaotic logic mapping. And an optimized particle swarm 
+optimization algorithm was proposed, which selects the most suitable DCT sub-band through multidimensional 
+optimization and estimates the watermark embedding factor by considering the imperceptibility and robustness 
+of the watermark scheme. This algorithm can better meet the watermark requirements, but its robustness 
+Scientific Reports  |        (2024) 14:24735 2 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
+--- PAGE 2 ---
+to some geometric attacks is not strong. Zhang H et al.27 proposed a hybrid domain watermarking scheme 
+for QWT and QSVD. The watermark is embedded into the Y component of the YCbCr color space. For the 
+security of the watermark, the watermark is encrypted with a 2D Chebyshev logistic map and then embedded. 
+Experimental results show that the scheme is not robust. Wang et al.28 proposed a color image watermarking 
+method using multilevel DWT-SVD and chaotic encryption. To embed the watermark, both the cover image 
+and the watermarked image are converted to NTSC color space. Experimental results show that the scheme is 
+less robust to image processing attacks.
+Sourabh Sharma et al.29 proposed a new robust adaptive watermarking scheme, where the host image is 
+decomposed into four subbands of the same dimensions by Redundant Discrete Wavelet Transform (RDWT), 
+and then Singular Value Decomposition (SVD) is performed on the approximate subbands to obtain the principal 
+components (PCs). Then adaptive multiscale factor optimized by artificial bee colony is used to insert the 
+disrupted watermark directly into the principal components of the disrupted host image, which overcomes the 
+trade-off between imperceptibility and robustness of the watermarked image. Meanwhile, the scheme overcomes 
+the security problem of false positive error (FPE), which is common in existing watermarking schemes based 
+on singular value decomposition. Sourabh Sharma et al.30 proposed a hybrid DCT-NNMF domain based 
+color image watermarking. The scheme utilizes Multi-Objective Artificial Bee Colony (MOABC) to generate 
+optimal multiple embedding factors to achieve the elimination of the imbalance between imperceptibility and 
+robustness.To improve the security of the watermark, a key is created from the watermarked image, which is 
+required to successfully extract the correct watermark.The experimental results show that the scheme has better 
+visual quality and robustness. Sourabh Sharma et al.31 proposed an adaptive color image blind watermarking 
+method based on boosted wavelet transform and discrete cosine transform, which balances the visual quality 
+and robustness of the watermark by optimizing the algorithm of Artificial Bee Colony (ABC) to optimize the 
+optimal embedding factor, and the experimental results show that the scheme has better imperceptibility and 
+robustness to resist image processing and manipulation attacks.
+Singh, O.P . et al.32 proposed an optimization based robust watermarking algorithm for color medical image 
+copyright protection. The algorithm decomposes the host image using the enhanced wavelet transform (LWT), 
+decomposes the transformed coefficients using the discrete cosine transform, and embeds multiple watermarks 
+into the transformed host image using a hybrid optimization algorithm. The experimental results show that the 
+algorithm has good invisibility, watermark payload, and robustness against image processing attacks. Priyanka et 
+al.33 proposed a medical image data hiding method in the context of invisibility, robustness, security, and low time 
+cost. Firstly, use a local binary pattern based on adjacent pixels to calculate the optimal value for embedding two 
+markers. Secondly, the host medical images are labeled using enhanced wavelet transform, LU decomposition, 
+singular value decomposition, and embedding factors. Finally, 3D chaos is used to encrypt the labeled image. 
+The experimental results and performance analysis indicate that the proposed scheme has better robustness, 
+imperceptibility, and security, and reduces the time cost compared to other traditional encryption techniques. 
+Singh, Om Prakash et al.34 proposed a medical image watermarking scheme based on integer wavelet transform 
+(IWT) and least significant bit (LSB). This technology first converts the cover image into three channels, and 
+then uses IWT to convert each channel. With the help of LSB scheme, multiple markers are hidden in the overlay 
+medium. At the same time, lossless soft methods are used to compress image labels before embedding, thereby 
+reducing storage and transmission overhead and improving the embedding ability of labeled color images. The 
+experimental results show that this scheme has good performance in terms of perceived quality, robustness, and 
+capacity.
+It is obvious from the literature review that the balance between perceptibility, robustness and embedding 
+capacity is crucial in the field of image watermarking and the hybrid domain watermarking scheme helps to 
+balance the imperceptibility and robustness of the watermarking algorithms, so in this paper we propose a color 
+image watermarking scheme based on DWT-HD-SVD.
+Motivation and contribution
+In recent years, image watermarking technology has been widely used in the fields of information hiding as 
+well as copyright protection, and mixed-domain watermarking has important advantages in improving the 
+imperceptibility and robustness of watermarking algorithms. Both DWT and SVD are lossless transforms, which 
+do not significantly degrade the quality of the image during the whole process of watermark embedding and 
+extraction, and both Heisenberg decomposition and SVD have good stability, which can effectively improve 
+the robustness of the watermarking algorithm in the face of attacks. One of the key issues in watermarking 
+techniques based on singular value decomposition is FPP and when the image embedded in the watermark 
+is attacked, the singular value of the image tends to become larger and it needs to be corrected appropriately. 
+Therefore, in this paper, we propose a robust watermarking scheme based on DWT-HD-SVD that can resist 
+various types of attacks such as noise attacks, filtering attacks, etc.
+The innovation of this paper is to propose a robust watermarking scheme based on DWT-HD-SVD, which 
+balances the robustness and imperceptibility of watermarking by adaptively computing the embedding factor 
+using the entropy of the cover image in YCbCr color space. The main contributions of this work are:
+ 1.  This paper proposes a color image watermarking scheme based on DWT-HD-SVD, which calculates the 
+embedding factor by the visual entropy and edge entropy of the image, and balances the imperceptibility and 
+robustness of the watermark.
+ 2.  In order to solve the FPP problem and the problem that the singular value becomes large after the watermark 
+is attacked, a singular value correction method is proposed to enhance the anti-attack ability of the algo -
+rithm.
+Scientific Reports  |        (2024) 14:24735 3 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
+--- PAGE 3 ---
+ 3.  Balance the imperceptibility and robustness of the watermarking scheme by improving the Alpha hybrid 
+algorithm.
+The experimental results show that the algorithm has better imperceptibility as well as larger embedding capacity 
+than existing algorithms, exhibits excellent robustness in the face of common attacks, and strikes a good balance 
+between robustness and imperceptibility.
+The rest of the paper is structured as follows. Section 2 describes some of the techniques used in this paper, 
+Section 3 describes the watermarking scheme proposed in this paper, Section 4 shows the experimental results 
+of this scheme, Section 5 summarizes the work of this paper.
+Background
+Logistic chaos mapping
+Chaos occurs in systems with nonlinear processes that are sensitive to the starting and control points, and are 
+random and unpredictable in chaotic orbits, and this security system is characterized by randomness, mixing, 
+and reliability35. Therefore, the most common method is to use chaotic systems for encryption. In this paper, 
+Logistic mapping is used to encrypt the watermark image thereby meeting the security requirements of the 
+watermarking system. The essence of Logistic mapping is to change the correlation between neighboring pixel 
+points in the original watermark image without changing the gray value and histogram of the original image. The 
+equation for one-dimensional Logistic mapping is:
+ xk+1=µxk(1−xk),(k=0,1,···n) (1)
+where xk∈(0,1) is the kth value produced by the iteration and µ∈[0,4] is the parameter of the logistic mapping, 
+and the resulting sequence satisfies the chaotic property only when 3.5699456 <µ≤4. Thus the generated 
+chaotic sequence can be controlled by a reasonable choice of the initial value x0 and the parameter µ. Figure 1 
+shows the encryption of a 256 ×256 grayscale image using Logistic chaotic mapping with x0=0.5 and µ=4.
+As can be seen from Fig. 1, the histogram of the encrypted image has no similarity with the histogram of the 
+original image, it looks like two different maps and the images before encryption and after decryption are the 
+same, so it is said that the image encryption of Logistic chaotic mapping is reliable and effective to improve the 
+security of the watermarking algorithm.
+Discrete wavelet transform
+Discrete Wavelet Transform is an important signal analysis method, which is often used for time-frequency 
+analysis and processing of signals36. It is widely used in image processing due to its good multi decomposition 
+capability, DWT can decompose the image layer by layer through filters, so it is called image microscope. Doing 
+two-dimensional discrete wavelet transform on the image will get four sub-bands, LL, LH, HL, HH, and the vast 
+majority of the energy of the original image is concentrated in the LL sub-band, which has strong anti-jamming 
+and stability, while the horizontal low-frequency component and vertical high-frequency component (LH sub-
+band), the horizontal high-frequency component and vertical low-frequency component (HL sub-band), and 
+the horizontal and vertical high-frequency components (HH sub-bands) show the characteristics of the original 
+Fig. 1 . Logistic encryption effect, ( d–f) are the histograms corresponding to ( a–c) respectively. 
+Scientific Reports  |        (2024) 14:24735 4 | https://doi.org/10.1038/s41598-024-76101-wwww.nature.com/scientificreports/
