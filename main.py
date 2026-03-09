@@ -97,7 +97,7 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
             return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
 
     # Embed
-    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", 40, username)
+    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", 70, username)
     user.set_key_data(key)
     
     # Register
@@ -184,8 +184,8 @@ async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
         diff_bits = sum(1 for a, b in zip(bin_extracted, bin_expected) if a != b)
         print(f"DEBUG - Bits different: {diff_bits}")
         
-        # If less than 16 bits are wrong, watermark survived.
-        if diff_bits <= 16:
+        # Allow up to 32 bits of damage to survive screenshot/rendering pipeline attacks
+        if diff_bits <= 32:
             is_match = True
             
     return {
