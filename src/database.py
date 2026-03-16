@@ -14,7 +14,20 @@ Base = declarative_base()
 # 2. ENCRYPTION SETUP (For Watermark Keys)
 KEY_FILE = "secret.key"
 
+import warnings
+
 def load_key():
+    # Priority 1: Load from environment variable (recommended for production)
+    env_key = os.environ.get("NEUROSTAMP_SECRET_KEY")
+    if env_key:
+        return env_key.encode() if isinstance(env_key, str) else env_key
+    
+    # Priority 2: Fall back to file (dev only)
+    warnings.warn(
+        "NEUROSTAMP_SECRET_KEY env var not set — falling back to file-based key. "
+        "This is insecure for production. Set the env var to your Fernet key.",
+        stacklevel=2,
+    )
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
         with open(KEY_FILE, "wb") as key_file:

@@ -184,7 +184,72 @@ NeuroStamp/
 6. ✅ Implemented visualization engine for algorithm demonstration
 7. 🔄 Attack simulation UI ready (robustness testing - in progress)
 
+
+---
+
+## Week 9: Scaling Robustness & Aspect Ratio Testing
+**Date: 15-02-2026 to 21-02-2026**
+
+| Date | Work Done | Remarks |
+|------|-----------|---------| 
+| 15-02-2026 to 21-02-2026 | • Identified failure of watermark extraction after image scaling attacks | Watermark was lost when image was resized to smaller dimensions |
+| | • Investigated root cause: DWT grid misalignment after resize | Scaled image no longer matches the original embedding grid |
+| | • Implemented **dimension recovery alignment** in `/verify` route: resizes the suspect image back to its original registered dimensions before extraction | Original width/height stored in `ImageRegistry` table at stamp time |
+| | • Created `test_scaling_limits.py` — tests watermark survival from 90% down to 10% scale | Found that extraction succeeds down to ~40% scale with recovery alignment |
+| | • Created `test_scaling_limits_lena.py` — scaling limit tests using `lena.jpg` as reference image | Cross-validated results across different image types |
+| | • Created `test_aspect_ratio_scaling.py` — tests extreme aspect ratio distortions (e.g., squash height 50%, stretch width 200%) | Simulates Instagram/social media crop/resize pipelines |
+| | • Verified extraction survives standard aspect ratio shifts with recovery alignment active | Pass rate significantly improved |
+
+---
+
+## Week 10: Crop Attack Survival
+**Date: 22-02-2026 to 28-02-2026**
+
+| Date | Work Done | Remarks |
+|------|-----------|---------| 
+| 22-02-2026 to 28-02-2026 | • Identified critical vulnerability: **crop attack destroys watermark** | 5% crop removes border blocks where watermark was embedded |
+| | • Root cause analysis: watermark bits were embedded starting from the first/outermost image blocks | Outermost blocks are exactly what a crop attack removes |
+| | • Designed fix: add a **`block_offset`** parameter to both `embed_watermark()` and `extract_watermark()` in `core.py` | Skipping the outermost N blocks ensures the watermark survives cropping |
+| | • Implemented `block_offset` in `embed_watermark()` — embedding begins from an inner safe zone | Frontend passes consistent offset value in both stamp and verify calls |
+| | • Implemented matching `block_offset` in `extract_watermark()` — extraction reads from the same inner zone | Offset must match on both sides; stored implicitly via consistent API calls |
+| | • Re-ran attack simulation with crop attack enabled — verified watermark survives 5% and 10% crop | Extraction integrity confirmed post-fix |
+| | • Created `test_robustness.py` update — added crop attack to robustness test suite | Automated regression testing for crop, scale, noise, blur, and JPEG attacks |
+
+---
+
+## Week 11: Algorithm Hardening & Integration Testing
+**Date: 01-03-2026 to 07-03-2026**
+
+| Date | Work Done | Remarks |
+|------|-----------|---------| 
+| 01-03-2026 to 07-03-2026 | • End-to-end robustness testing of the complete pipeline after crop and scaling fixes | Stamp → Attack → Verify cycle tested for all 6 attack types |
+| | • Fixed edge case: odd-dimension images causing DWT grid misalignment | `load_image()` already trimmed odd pixels — confirmed it works correctly post-offset |
+| | • Tested combined attacks (e.g., crop + noise, JPEG + scale) | Combined attacks increase bit error rate but stay within 32-bit tolerance threshold |
+| | • Tuned bit error tolerance in `/verify` — allows up to 32 corrupted bits out of 120 before declaring integrity failure | Balances robustness vs false-positive rate |
+| | • Verified the double-spending protection (dHash check) still works after watermarking | Hamming distance < 10 threshold correctly identifies duplicate submissions |
+| | • Performed manual walkthrough of the full web UI flow | Confirmed stamp → download → attack → verify works end-to-end in browser |
+| | • Documented algorithm parameters (alpha strength, block size, bit count) for report | 70 alpha for stamp, 40 alpha for verify extraction, 120 bits, 4×4 blocks |
+
+---
+
+## Week 12: Security Hardening & Production Readiness
+**Date: 08-03-2026 to 14-03-2026**
+
+| Date | Work Done | Remarks |
+|------|-----------|---------| 
+| 08-03-2026 to 14-03-2026 | • Conducted comprehensive security audit of the web application | Identified 8 vulnerabilities across auth, data exposure, uploads, and session management |
+| | • **Fix 1 — Broken Auth Model**: Replaced client-sent `username` in form body with server-side signed session cookies using `itsdangerous` library | Prevents account impersonation — attacker can no longer POST any username |
+| | • **Fix 2 — Admin Endpoint Exposure**: Protected `/db-viewer` behind session auth; removed password hash and encrypted key previews from HTML output | `/db-viewer` was previously accessible by anyone without credentials |
+| | • **Fix 3 — Secure Cookie Flags**: Added `HttpOnly`, `SameSite=Lax`, and `Max-Age=86400` to all cookies; added `Secure` flag toggle for HTTPS via env var | Reduces session theft and CSRF risk in browsers |
+| | • **Fix 4 — CSRF Protection**: Implemented double-submit cookie pattern; all state-changing POST endpoints validate a `csrf_token` form field against the cookie | Applied to `/stamp`, `/attack`, `/process-vis` |
+| | • **Fix 5 — Upload Hardening**: Added extension allowlist, 20MB size cap, PIL decompression bomb guard (`MAX_IMAGE_PIXELS`), and PIL `verify()` check | Rejects `.exe`, oversized files, and malformed/corrupted uploads |
+| | • **Fix 6 — Key Management**: Fernet encryption key now loaded from `NEUROSTAMP_SECRET_KEY` environment variable, falling back to `secret.key` file with a startup warning | Decouples secrets from codebase for production deployments |
+| | • **Fix 7 — DB Query Optimization**: Added exact-match fast path before full perceptual hash scan; bounded scan to 5000 rows | Prevents linear CPU/latency DoS as image registry grows |
+| | • **Fix 8 — Dependency Pinning**: Pinned all 15 packages to exact versions in `requirements.txt`; added previously unlisted `bcrypt` and `itsdangerous` | Ensures reproducible builds and prevents accidental vulnerable upgrades |
+| | • Security regression tests verified all fixes working: 401 on auth bypass, 307 on unauthenticated `/db-viewer`, 403 on missing CSRF, 400 on disallowed extension | All tests passed |
+
 ---
 
 *Project Diary prepared for academic documentation purposes.*
-*Current Status: Week 9 - Ready for further enhancements and testing.*
+*Current Status: Week 12 Complete — Security hardened and production-ready.*
+
