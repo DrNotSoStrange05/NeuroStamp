@@ -27,6 +27,12 @@ ADMIN_USERS = [u.strip() for u in os.environ.get("NEUROSTAMP_ADMIN_USERS", "").s
 # Secure cookie flag (set to "true" in production behind HTTPS)
 SECURE_COOKIES = os.environ.get("NEUROSTAMP_SECURE_COOKIES", "false").lower() == "true"
 
+# Watermark embedding strength (alpha).
+# A single constant ensures embed and extract always use the same threshold.
+# Decision rule: bit=1 when (S[0]_current - S[0]_original) > WATERMARK_ALPHA/2
+# Range guidance: 50–80 balances robustness vs. PSNR. Keep at 70 unless re-tuning.
+WATERMARK_ALPHA = 70
+
 # Upload limits
 MAX_UPLOAD_BYTES = int(os.environ.get("NEUROSTAMP_MAX_UPLOAD_MB", "20")) * 1024 * 1024
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
@@ -279,7 +285,7 @@ async def stamp_image(
                 return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
 
     # Embed
-    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", 70, username)
+    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
     user.set_key_data(key)
     
     # Register
@@ -360,7 +366,8 @@ async def verify(
         suspect_img_arr = np.array(pil_img)
     
     # 6. Extract the 120-bit Bipolar DCT Signature
-    text = extract_watermark(suspect_img_arr, key, 40, 120, user.username)
+    # alpha MUST match WATERMARK_ALPHA used during embedding so the threshold is correct
+    text = extract_watermark(suspect_img_arr, key, WATERMARK_ALPHA, 120, user.username)
     print(f"DEBUG - Expected: 'ID:{user.user_uid}'")
     print(f"DEBUG - Extracted: '{text}'")
     
@@ -602,7 +609,7 @@ async def process_visualization(
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found. Please re-login.")
-    wm_img, key = embed_watermark(original, f"ID:{user.user_uid}", 100, username)
+    wm_img, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
     
     wm_path = file_path.replace("original", "watermarked")
     save_image(wm_img, wm_path)
