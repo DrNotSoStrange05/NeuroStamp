@@ -232,16 +232,16 @@
     </div>
 
     <script>
-        // --- AUTO-DETECT USER FROM BACKEND ---
-        const CURRENT_USER = "{{ username }}";
+        // --- CSRF TOKEN FROM SERVER ---
+        const CSRF_TOKEN = "{{ csrf_token }}";
         let currentStampedFilename = "";
 
         async function handleStamp(e) {
             e.preventDefault();
             const formData = new FormData();
 
-            // AUTOMATICALLY ATTACH THE LOGGED-IN USERNAME
-            formData.append('username', CURRENT_USER);
+            // CSRF token for protection
+            formData.append('csrf_token', CSRF_TOKEN);
             formData.append('file', document.getElementById('stampFile').files[0]);
 
             const btn = e.target.querySelector('button');
@@ -324,6 +324,7 @@
             const formData = new FormData();
             formData.append('filename', currentStampedFilename);
             formData.append('attack_type', type);
+            formData.append('csrf_token', CSRF_TOKEN);
             document.getElementById('attackResult').innerHTML = `<span class="text-warning">> INJECTING ${type.toUpperCase()}...</span>`;
 
             try {

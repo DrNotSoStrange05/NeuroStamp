@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Depends, Request, Response
+from fastapi import FastAPI, UploadFile, File, Form, Depends, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -7,12 +7,38 @@ import bcrypt
 from src.database import SessionLocal, init_db, User, ImageRegistry
 from src.utils import load_image, save_image, binary_to_text, compute_dhash, calculate_hamming_distance
 from src.core import embed_watermark, extract_watermark
-import shutil, os, uuid, numpy as np
+import shutil, os, uuid, numpy as np, secrets
 from PIL import Image, ImageFilter
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 app = FastAPI()
 
+# ============================================================
 # 1. SECURITY SETUP
+# ============================================================
+
+# App secret for signing cookies (load from env, or generate random for dev)
+APP_SECRET = os.environ.get("NEUROSTAMP_APP_SECRET", secrets.token_hex(32))
+COOKIE_SIGNER = URLSafeTimedSerializer(APP_SECRET)
+
+# Admin users (comma-separated usernames from env, or empty = first user)
+ADMIN_USERS = [u.strip() for u in os.environ.get("NEUROSTAMP_ADMIN_USERS", "").split(",") if u.strip()]
+
+# Secure cookie flag (set to "true" in production behind HTTPS)
+SECURE_COOKIES = os.environ.get("NEUROSTAMP_SECURE_COOKIES", "false").lower() == "true"
+
+# Watermark embedding strength (alpha).
+# A single constant ensures embed and extract always use the same threshold.
+# Decision rule: bit=1 when (S[0]_current - S[0]_original) > WATERMARK_ALPHA/2
+# Range guidance: 50–80 balances robustness vs. PSNR. Keep at 70 unless re-tuning.
+WATERMARK_ALPHA = 70
+
+# Upload limits
+MAX_UPLOAD_BYTES = int(os.environ.get("NEUROSTAMP_MAX_UPLOAD_MB", "20")) * 1024 * 1024
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
+Image.MAX_IMAGE_PIXELS = 89_000_000  # ~9400x9400, prevents decompression bombs
+
+
 def get_password_hash(password: str) -> str:
     """Hash password using bcrypt"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -21,7 +47,94 @@ def verify_password(plain: str, hashed: str) -> bool:
     """Verify password against bcrypt hash"""
     return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
 
-# 2. APP SETUP
+
+# ============================================================
+# 2. SIGNED SESSION HELPERS
+# ============================================================
+
+def sign_session(username: str) -> str:
+    """Create a signed session token for the given username."""
+    return COOKIE_SIGNER.dumps(username, salt="user-session")
+
+def verify_session(token: str, max_age: int = 86400) -> str | None:
+    """Verify a signed session token. Returns username or None."""
+    try:
+        return COOKIE_SIGNER.loads(token, salt="user-session", max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        return None
+
+def get_session_user(request: Request) -> str | None:
+    """Extract and verify the logged-in username from the request cookie."""
+    token = request.cookies.get("user_session")
+    if not token:
+        return None
+    return verify_session(token)
+
+
+# ============================================================
+# 3. CSRF PROTECTION (Double-Submit Cookie)
+# ============================================================
+
+def generate_csrf_token() -> str:
+    """Generate a cryptographically random CSRF token."""
+    return secrets.token_hex(32)
+
+def validate_csrf(request: Request, csrf_token: str = Form(None)):
+    """
+    Validate CSRF token from form field against the cookie.
+    The csrf_token cookie is non-httponly so the frontend JS can read it.
+    The form must include a matching csrf_token hidden field.
+    """
+    cookie_token = request.cookies.get("csrf_token")
+    if not cookie_token or not csrf_token or not secrets.compare_digest(cookie_token, csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+
+# ============================================================
+# 4. UPLOAD VALIDATION
+# ============================================================
+
+async def validate_upload(file: UploadFile) -> bytes:
+    """
+    Validate an uploaded file:
+    - Extension allowlist
+    - File size limit
+    - PIL can actually open it (rejects malformed / non-image payloads)
+    Returns the file bytes if valid.
+    """
+    # Check extension
+    _, ext = os.path.splitext(file.filename or "")
+    if ext.lower() not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{ext}' not allowed. Accepted: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+    
+    # Read and check size
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(contents) // (1024*1024)}MB). Max: {MAX_UPLOAD_BYTES // (1024*1024)}MB"
+        )
+    
+    # Verify it's a valid image PIL can open
+    import io
+    try:
+        img = Image.open(io.BytesIO(contents))
+        img.verify()  # verify() checks for corrupted data
+    except Exception:
+        raise HTTPException(status_code=400, detail="File is not a valid image or is corrupted")
+    
+    # Reset file position for downstream consumers
+    await file.seek(0)
+    return contents
+
+
+# ============================================================
+# 5. APP SETUP
+# ============================================================
+
 os.makedirs("static/uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -44,19 +157,53 @@ def get_db():
     finally:
         db.close()
 
-# --- AUTH ROUTES ---
+
+# ============================================================
+# HELPER: Set secure cookie with proper flags
+# ============================================================
+
+def set_secure_cookie(response: Response, key: str, value: str, httponly: bool = True):
+    """Set a cookie with proper security flags."""
+    response.set_cookie(
+        key=key,
+        value=value,
+        httponly=httponly,
+        samesite="Lax",
+        secure=SECURE_COOKIES,
+        max_age=86400,  # 24 hours
+    )
+
+
+# ============================================================
+# AUTH ROUTES
+# ============================================================
+
 @app.get("/", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    username = request.cookies.get("user_session")
-    if not username: return RedirectResponse(url="/")
-    return templates.TemplateResponse("index.html", {"request": request, "username": username})
+    username = get_session_user(request)
+    if not username:
+        return RedirectResponse(url="/")
+    csrf_token = generate_csrf_token()
+    response = templates.TemplateResponse("index.html", {
+        "request": request,
+        "username": username,
+        "csrf_token": csrf_token,
+    })
+    # Set CSRF cookie (non-httponly so JS can read it)
+    set_secure_cookie(response, "csrf_token", csrf_token, httponly=False)
+    return response
 
 @app.post("/register")
-async def register(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+async def register(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
     if db.query(User).filter(User.username == username).first():
         return JSONResponse({"status": "error", "message": "User exists!"})
     new_user = User(username=username, hashed_password=get_password_hash(password), user_uid=str(uuid.uuid4())[:12])
@@ -64,40 +211,81 @@ async def register(username: str = Form(...), password: str = Form(...), db: Ses
     return JSONResponse({"status": "success", "message": f"ID: {new_user.user_uid}"})
 
 @app.post("/login")
-async def login(response: Response, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+async def login(
+    response: Response,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
         return JSONResponse({"status": "error", "message": "Invalid Credentials"}, status_code=401)
+    
     resp = JSONResponse({"status": "success"})
-    resp.set_cookie(key="user_session", value=username)
+    # Signed session cookie — can't be forged without APP_SECRET
+    set_secure_cookie(resp, "user_session", sign_session(username))
     return resp
 
 @app.get("/logout")
 async def logout():
-    resp = RedirectResponse(url="/"); resp.delete_cookie("user_session")
+    resp = RedirectResponse(url="/")
+    resp.delete_cookie("user_session")
+    resp.delete_cookie("csrf_token")
     return resp
 
-# --- CORE ROUTES ---
+
+# ============================================================
+# CORE ROUTES
+# ============================================================
+
 @app.post("/stamp")
-async def stamp_image(username: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def stamp_image(
+    request: Request,
+    file: UploadFile = File(...),
+    csrf_token: str = Form(None),
+    db: Session = Depends(get_db),
+):
+    # Derive identity from signed session — never trust client-sent username
+    username = get_session_user(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # CSRF check
+    validate_csrf(request, csrf_token)
+    
+    # Validate uploaded file
+    file_bytes = await validate_upload(file)
+    
     user = db.query(User).filter(User.username == username).first()
-    if not user: return {"error": "User error. Relogin."}
+    if not user:
+        raise HTTPException(status_code=401, detail="User error. Relogin.")
 
     # Save & Load
     secure_name = get_secure_filename(file.filename)
     path = f"static/uploads/{secure_name}"
-    with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
+    with open(path, "wb") as f:
+        f.write(file_bytes)
     original = load_image(path)
     
-    # Double Spending Check
+    # Double Spending Check — try exact match first, then bounded hamming scan
     img_hash = compute_dhash(original)
-    for r in db.query(ImageRegistry).all():
-        if calculate_hamming_distance(img_hash, r.image_hash) < 10 and r.owner_uid != user.user_uid:
-            owner = db.query(User).filter(User.user_uid == r.owner_uid).first()
-            return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
+    
+    # Fast path: exact match
+    exact = db.query(ImageRegistry).filter_by(image_hash=img_hash).first()
+    if exact and exact.owner_uid != user.user_uid:
+        owner = db.query(User).filter(User.user_uid == exact.owner_uid).first()
+        return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
+    
+    # Slow path: perceptual scan (bounded to prevent DoS)
+    if not exact:
+        SCAN_LIMIT = 5000
+        for r in db.query(ImageRegistry).limit(SCAN_LIMIT).all():
+            if calculate_hamming_distance(img_hash, r.image_hash) < 10 and r.owner_uid != user.user_uid:
+                owner = db.query(User).filter(User.user_uid == r.owner_uid).first()
+                return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
 
     # Embed
-    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", 70, username)
+    watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
     user.set_key_data(key)
     
     # Register
@@ -117,11 +305,19 @@ async def stamp_image(username: str = Form(...), file: UploadFile = File(...), d
     return {"status": "success", "download_url": f"/static/uploads/{out_name}"}
 
 @app.post("/verify")
-async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def verify(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    # Validate uploaded file
+    file_bytes = await validate_upload(file)
+    
     # 1. Save uploaded file securely
     secure_name = get_secure_filename(file.filename)
     path = f"static/uploads/verify_{secure_name}"
-    with open(path, "wb") as f: shutil.copyfileobj(file.file, f)
+    with open(path, "wb") as f:
+        f.write(file_bytes)
     
     # 2. Load the suspected image
     suspect_img_arr = load_image(path)
@@ -132,11 +328,19 @@ async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
     matched_registry = None
     min_dist = 100
     
-    for r in db.query(ImageRegistry).all():
-        dist = calculate_hamming_distance(suspect_hash, r.image_hash)
-        if dist < 22 and dist < min_dist: # 22 bit tolerance for dHash (handles crop/scale/screenshot attacks)
-            min_dist = dist
-            matched_registry = r
+    # Fast path: exact match first
+    exact = db.query(ImageRegistry).filter_by(image_hash=suspect_hash).first()
+    if exact:
+        matched_registry = exact
+        min_dist = 0
+    else:
+        # Bounded perceptual scan
+        SCAN_LIMIT = 5000
+        for r in db.query(ImageRegistry).limit(SCAN_LIMIT).all():
+            dist = calculate_hamming_distance(suspect_hash, r.image_hash)
+            if dist < 22 and dist < min_dist: # 22 bit tolerance for dHash (handles crop/scale/screenshot attacks)
+                min_dist = dist
+                matched_registry = r
             
     if not matched_registry:
         return {"status": "error", "error": "No matching copyright found in the NeuroStamp Global Registry."}
@@ -162,7 +366,8 @@ async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
         suspect_img_arr = np.array(pil_img)
     
     # 6. Extract the 120-bit Bipolar DCT Signature
-    text = extract_watermark(suspect_img_arr, key, 40, 120, user.username)
+    # alpha MUST match WATERMARK_ALPHA used during embedding so the threshold is correct
+    text = extract_watermark(suspect_img_arr, key, WATERMARK_ALPHA, 120, user.username)
     print(f"DEBUG - Expected: 'ID:{user.user_uid}'")
     print(f"DEBUG - Extracted: '{text}'")
     
@@ -197,7 +402,20 @@ async def verify(file: UploadFile = File(...), db: Session = Depends(get_db)):
     }
 
 @app.post("/attack")
-async def attack(filename: str = Form(...), attack_type: str = Form(...)):
+async def attack(
+    request: Request,
+    filename: str = Form(...),
+    attack_type: str = Form(...),
+    csrf_token: str = Form(None),
+):
+    # Require session for attack sim
+    username = get_session_user(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # CSRF check
+    validate_csrf(request, csrf_token)
+    
     # Sanitize filename (ensure just basename)
     safe_filename = os.path.basename(filename)
     path = f"static/uploads/{safe_filename}"
@@ -222,9 +440,22 @@ async def attack(filename: str = Form(...), attack_type: str = Form(...)):
     img.save(f"static/uploads/{out}")
     return {"status": "success", "attack_url": f"/static/uploads/{out}"}
 
-# --- ADMIN ROUTES (THE BEAUTIFUL VERSION) ---
+
+# ============================================================
+# ADMIN ROUTES — Requires authenticated session
+# ============================================================
+
 @app.get("/db-viewer", response_class=HTMLResponse)
 async def view_database(request: Request, db: Session = Depends(get_db)):
+    # Require valid session
+    username = get_session_user(request)
+    if not username:
+        return RedirectResponse(url="/")
+    
+    # Admin check: if ADMIN_USERS is configured, enforce it
+    if ADMIN_USERS and username not in ADMIN_USERS:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
     users = db.query(User).all()
     registry = db.query(ImageRegistry).all()
     
@@ -242,7 +473,6 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
             .card-header { background: #111; border-bottom: 1px solid #333; color: #fff; font-weight: bold; }
             .table { color: #ccc; }
             .table-hover tbody tr:hover { color: #fff; background-color: rgba(0, 255, 157, 0.1); }
-            .encrypted { color: #ff0055; word-break: break-all; font-size: 0.85em; }
             .uuid { color: #00d2ff; font-weight: bold; }
             h2 { text-shadow: 0 0 10px rgba(0, 255, 157, 0.5); }
         </style>
@@ -250,7 +480,7 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
     <body class="p-5">
         <div class="container">
             <div class="d-flex justify-content-between align-items-center mb-5">
-                <h2>📂 ENCRYPTED DATABASE VAULT</h2>
+                <h2>📂 DATABASE VAULT</h2>
                 <div class="d-flex gap-2">
                      <a href="/visualize" class="btn btn-info btn-sm fw-bold">👁️ VISUALIZATION ENGINE</a>
                      <a href="/dashboard" class="btn btn-outline-light btn-sm">↻ REFRESH</a>
@@ -258,7 +488,7 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
             </div>
 
             <div class="card mb-5 shadow-lg">
-                <div class="card-header">🔒 USER CREDENTIALS & KEYS (Table: users)</div>
+                <div class="card-header">🔒 REGISTERED USERS (Table: users)</div>
                 <div class="card-body p-0">
                     <table class="table table-dark table-hover mb-0">
                         <thead>
@@ -266,24 +496,21 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
                                 <th>ID</th>
                                 <th>USERNAME</th>
                                 <th>PUBLIC UUID</th>
-                                <th>PASSWORD HASH (bcrypt)</th>
-                                <th>ENCRYPTED WATERMARK KEY (AES-256)</th>
+                                <th>HAS WATERMARK KEY</th>
                             </tr>
                         </thead>
                         <tbody>
     """
     
     for u in users:
-        key_preview = str(u.encrypted_key_data)[:40] + "..." if u.encrypted_key_data else "<span class='text-muted'>[NO_KEY_GENERATED]</span>"
-        pw_preview = u.hashed_password[:20] + "..." if u.hashed_password else "N/A"
-
+        # SECURITY: Do NOT expose password hashes or encrypted key data
+        has_key = "✅ YES" if u.encrypted_key_data else "❌ NO"
         html_content += f"""
             <tr>
                 <td>{u.id}</td>
                 <td class="fw-bold text-white">{u.username}</td>
                 <td class="uuid">{u.user_uid}</td>
-                <td class="text-warning">{pw_preview}</td>
-                <td class="encrypted">{key_preview}</td>
+                <td>{has_key}</td>
             </tr>
         """
         
@@ -331,27 +558,58 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
     """
     return HTMLResponse(content=html_content)
 
+
+# ============================================================
 # VISUALIZATION ENGINE ENDPOINTS
+# ============================================================
+
 @app.get("/visualize", response_class=HTMLResponse)
 async def visualize_page(request: Request):
-    user_cookie = request.cookies.get("user_session")
-    if not user_cookie: return RedirectResponse(url="/")
-    return templates.TemplateResponse("visualize.html", {"request": request, "username": user_cookie})
+    username = get_session_user(request)
+    if not username:
+        return RedirectResponse(url="/")
+    csrf_token = generate_csrf_token()
+    response = templates.TemplateResponse("visualize.html", {
+        "request": request,
+        "username": username,
+        "csrf_token": csrf_token,
+    })
+    set_secure_cookie(response, "csrf_token", csrf_token, httponly=False)
+    return response
 
 from src.visualizer import generate_visualizations, generate_diff_map
 
 @app.post("/process-vis", response_class=HTMLResponse)
-async def process_visualization(username: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def process_visualization(
+    request: Request,
+    file: UploadFile = File(...),
+    csrf_token: str = Form(None),
+    db: Session = Depends(get_db),
+):
+    # Derive identity from session — not from form
+    username = get_session_user(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # CSRF check
+    validate_csrf(request, csrf_token)
+    
+    # Validate uploaded file
+    file_bytes = await validate_upload(file)
+    
     # 1. Save Original
     os.makedirs("static/vis", exist_ok=True)
     unique_id = uuid.uuid4().hex[:8]
     file_path = f"static/vis/demo_original_{unique_id}.jpg"
-    with open(file_path, "wb") as f: shutil.copyfileobj(file.file, f)
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
     
     # 2. Generate Watermarked Version
     original = load_image(file_path)
     user = db.query(User).filter(User.username == username).first()
-    wm_img, key = embed_watermark(original, f"ID:{user.user_uid}", 100, username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found. Please re-login.")
+    wm_img, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
     
     wm_path = file_path.replace("original", "watermarked")
     save_image(wm_img, wm_path)
@@ -362,9 +620,11 @@ async def process_visualization(username: str = Form(...), file: UploadFile = Fi
     # 4. Generate Diff Map
     vis_diff = generate_diff_map(file_path, wm_path, "static/vis", unique_id)
     
-    return templates.TemplateResponse("visualize.html", {
-        "request": {},
+    new_csrf = generate_csrf_token()
+    response = templates.TemplateResponse("visualize.html", {
+        "request": request,
         "username": username,
+        "csrf_token": new_csrf,
         "processed": True,
         "original_url": "/" + file_path,
         "watermarked_url": "/" + wm_path,
@@ -373,3 +633,5 @@ async def process_visualization(username: str = Form(...), file: UploadFile = Fi
         "vis_svd": vis_assets["svd"],
         "vis_diff": vis_diff
     })
+    set_secure_cookie(response, "csrf_token", new_csrf, httponly=False)
+    return response
