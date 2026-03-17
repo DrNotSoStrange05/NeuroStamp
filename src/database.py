@@ -19,11 +19,13 @@ def load_key():
     # On Render (or any cloud env), read from the SECRET_KEY environment variable.
     env_key = os.environ.get("SECRET_KEY")
     if env_key:
-        # Render auto-generates a base64 value; ensure it's valid Fernet (32 url-safe base64 bytes)
         try:
-            return env_key.encode() if len(base64.urlsafe_b64decode(env_key + '==')) == 32 else Fernet.generate_key()
-        except Exception:
+            # Validate by constructing Fernet — only valid 32-byte url-safe base64 keys work
+            Fernet(env_key.encode())
             return env_key.encode()
+        except Exception:
+            # Not a valid Fernet key (e.g. Render's random string) — generate a proper one
+            return Fernet.generate_key()
     # Local dev fallback: use key file
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
