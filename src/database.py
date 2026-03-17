@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from cryptography.fernet import Fernet
 import json
 import os
+import base64
 
 # 1. DATABASE SETUP
 SQLALCHEMY_DATABASE_URL = "sqlite:///./neurostamp.db"
@@ -15,6 +16,15 @@ Base = declarative_base()
 KEY_FILE = "secret.key"
 
 def load_key():
+    # On Render (or any cloud env), read from the SECRET_KEY environment variable.
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        # Render auto-generates a base64 value; ensure it's valid Fernet (32 url-safe base64 bytes)
+        try:
+            return env_key.encode() if len(base64.urlsafe_b64decode(env_key + '==')) == 32 else Fernet.generate_key()
+        except Exception:
+            return env_key.encode()
+    # Local dev fallback: use key file
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
         with open(KEY_FILE, "wb") as key_file:
