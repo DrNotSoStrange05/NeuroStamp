@@ -17,6 +17,28 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 app = FastAPI()
 
 # ============================================================
+# SECURITY HEADERS MIDDLEWARE
+# ============================================================
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://code.jquery.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
+    return response
+
+# ============================================================
 # 1. SECURITY SETUP
 # ============================================================
 
@@ -455,8 +477,8 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
     if not username:
         return RedirectResponse(url="/")
     
-    # Admin check: if ADMIN_USERS is configured, enforce it
-    if ADMIN_USERS and username not in ADMIN_USERS:
+    # Admin check: block access unless ADMIN_USERS is configured AND the user is in the list
+    if not ADMIN_USERS or username not in ADMIN_USERS:
         raise HTTPException(status_code=403, detail="Admin access required")
     
     users = db.query(User).all()
