@@ -4,65 +4,108 @@ from sqlalchemy.orm import sessionmaker
 from cryptography.fernet import Fernet
 import json
 import os
-import base64
 
-# 1. DATABASE SETUP
-SQLALCHEMY_DATABASE_URL = "sqlite:///./neurostamp.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+# ============================================================
+# 1. DATABASE URL
+# ============================================================
+# Set DATABASE_URL env var to a PostgreSQL connection string to use Postgres.
+# Example: postgresql://user:password@host:5432/neurostamp
+# Falls back to local SQLite for development when the env var is not set.
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./neurostamp.db")
+
+# Render / some providers serve "postgres://" (legacy) — SQLAlchemy needs "postgresql://"
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Use psycopg3 dialect (works with Python 3.13+)
+# Rewrite scheme so SQLAlchemy uses the psycopg3 driver
+if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgresql+psycopg2://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+
+IS_POSTGRES = DATABASE_URL.startswith("postgresql")
+
+# ============================================================
+# 2. ENGINE & SESSION
+# ============================================================
+
+if IS_POSTGRES:
+    # psycopg3 reads sslmode directly from the URL — no extra connect_args needed
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+    )
+else:
+    # SQLite-specific: disable same-thread check for FastAPI's threading model
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 2. ENCRYPTION SETUP (For Watermark Keys)
+# ============================================================
+# 3. ENCRYPTION SETUP (For Watermark Keys)
+# ============================================================
+
 KEY_FILE = "secret.key"
 
 def load_key():
-    # On Render (or any cloud env), read from the SECRET_KEY environment variable.
+    # Cloud env: read from SECRET_KEY environment variable
     env_key = os.environ.get("SECRET_KEY")
     if env_key:
         try:
-            # Validate by constructing Fernet — only valid 32-byte url-safe base64 keys work
             Fernet(env_key.encode())
             return env_key.encode()
         except Exception:
-            # Not a valid Fernet key (e.g. Render's random string) — generate a proper one
+            # Not a valid Fernet key — generate a fresh one
             return Fernet.generate_key()
-    # Local dev fallback: use key file
+    # Local dev fallback: persist key in a file so it survives restarts
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as key_file:
-            key_file.write(key)
+        with open(KEY_FILE, "wb") as f:
+            f.write(key)
     else:
-        with open(KEY_FILE, "rb") as key_file:
-            key = key_file.read()
+        with open(KEY_FILE, "rb") as f:
+            key = f.read()
     return key
 
 CIPHER_SUITE = Fernet(load_key())
 
-# 3. MODELS
+# ============================================================
+# 4. MODELS
+# ============================================================
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)  # <--- NEW: Stores the password hash
+    hashed_password = Column(String)
     user_uid = Column(String, unique=True, index=True)
-    
-    # STORED AS ENCRYPTED BYTES
-    encrypted_key_data = Column(LargeBinary, nullable=True) 
+
+    # Watermark key stored encrypted
+    encrypted_key_data = Column(LargeBinary, nullable=True)
 
     def set_key_data(self, data_list):
-        if data_list is None: return
+        if data_list is None:
+            return
         json_str = json.dumps(data_list)
         self.encrypted_key_data = CIPHER_SUITE.encrypt(json_str.encode())
 
     def get_key_data(self):
-        if not self.encrypted_key_data: return None
+        if not self.encrypted_key_data:
+            return None
         try:
             decrypted_json = CIPHER_SUITE.decrypt(self.encrypted_key_data).decode()
             return json.loads(decrypted_json)
         except Exception as e:
             print(f"Encryption Error: {e}")
             return None
+
 
 class ImageRegistry(Base):
     __tablename__ = "image_registry"
@@ -72,5 +115,11 @@ class ImageRegistry(Base):
     original_width = Column(Integer, default=0)
     original_height = Column(Integer, default=0)
 
+
+# ============================================================
+# 5. INIT
+# ============================================================
+
 def init_db():
+    """Create all tables if they don't already exist."""
     Base.metadata.create_all(bind=engine)

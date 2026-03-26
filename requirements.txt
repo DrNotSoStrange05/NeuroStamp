@@ -7,8 +7,10 @@ fastapi
 uvicorn
 python-multipart
 sqlalchemy
+psycopg[binary]
 passlib[bcrypt]
 cryptography
 jinja2
 Pillow
 itsdangerous
+python-dotenv
