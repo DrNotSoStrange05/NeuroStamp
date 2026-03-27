@@ -4,12 +4,12 @@ from sqlalchemy.orm import sessionmaker
 from cryptography.fernet import Fernet
 import json
 import os
+import urllib.parse as _urlparse
 
 # ============================================================
 # 1. DATABASE URL
 # ============================================================
 # Set DATABASE_URL env var to a PostgreSQL connection string to use Postgres.
-# Example: postgresql://user:password@host:5432/neurostamp
 # Falls back to local SQLite for development when the env var is not set.
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./neurostamp.db")
@@ -19,10 +19,17 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Use psycopg3 dialect (works with Python 3.13+)
-# Rewrite scheme so SQLAlchemy uses the psycopg3 driver
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgresql+psycopg2://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+
+# Strip query params that psycopg3 doesn't support.
+# Neon includes channel_binding=require which causes psycopg3 to crash on startup.
+_UNSUPPORTED_PARAMS = {"channel_binding"}
+if DATABASE_URL.startswith("postgresql"):
+    _parsed = _urlparse.urlparse(DATABASE_URL)
+    _qs = {k: v for k, v in _urlparse.parse_qsl(_parsed.query) if k not in _UNSUPPORTED_PARAMS}
+    DATABASE_URL = _urlparse.urlunparse(_parsed._replace(query=_urlparse.urlencode(_qs)))
 
 IS_POSTGRES = DATABASE_URL.startswith("postgresql")
 
@@ -62,7 +69,6 @@ def load_key():
             Fernet(env_key.encode())
             return env_key.encode()
         except Exception:
-            # Not a valid Fernet key — generate a fresh one
             return Fernet.generate_key()
     # Local dev fallback: persist key in a file so it survives restarts
     if not os.path.exists(KEY_FILE):
