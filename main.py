@@ -163,7 +163,15 @@ async def validate_upload(file: UploadFile) -> bytes:
 os.makedirs("static/uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+# Disable Jinja2's template caching to avoid `TypeError: cannot use 'tuple' as a dict key` on some platforms
+# (some combinations of Jinja2/Starlette pass dicts into the template cache key which may be unhashable).
+# Setting cache_size=0 forces no caching and prevents the error in runtime environments like Render/HF Spaces.
+templates.env.cache_size = 0
 init_db()
+
+# Debug: print which DATABASE_URL the app is using at startup
+from src.database import DATABASE_URL as _DB_URL
+print(f"DEBUG - Using DATABASE_URL={_DB_URL}")
 
 def get_secure_filename(filename: str) -> str:
     """
@@ -232,7 +240,13 @@ async def register(
     if db.query(User).filter(User.username == username).first():
         return JSONResponse({"status": "error", "message": "User exists!"})
     new_user = User(username=username, hashed_password=get_password_hash(password), user_uid=str(uuid.uuid4())[:12])
-    db.add(new_user); db.commit()
+    db.add(new_user)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"DB Error during register for user {username}: {e}")
+        return JSONResponse({"status": "error", "message": "Database error during registration."}, status_code=500)
     return JSONResponse({"status": "success", "message": f"ID: {new_user.user_uid}"})
 
 @app.post("/login")
