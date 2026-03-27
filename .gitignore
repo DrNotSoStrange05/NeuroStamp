@@ -31,3 +31,4 @@ static/vis/*
 .idea/
 .DS_Store
 Thumbs.db       
+.env
