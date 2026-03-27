@@ -4,13 +4,14 @@ PyWavelets
 scipy
 matplotlib
 fastapi
+starlette==0.41.3
 uvicorn
 python-multipart
 sqlalchemy
 psycopg[binary]
 passlib[bcrypt]
 cryptography
-jinja2
+jinja2==3.1.4
 Pillow
 itsdangerous
 python-dotenv
