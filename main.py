@@ -1,33 +1,59 @@
+# ============================================================
+# IMPORTS & INITIALIZATION
+# ============================================================
+# Load environment variables from .env file early to ensure all
+# configuration is available before the app starts
 from dotenv import load_dotenv
-load_dotenv()  # Load .env before anything else reads environment variables
+load_dotenv()
 
+# Core FastAPI imports for web framework, request/response handling
 from fastapi import FastAPI, UploadFile, File, Form, Depends, Request, Response, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+
+# SQLAlchemy for database ORM and session management
 from sqlalchemy.orm import Session
+
+# Password hashing and cryptography
 import bcrypt
+
+# Database models and utilities
 from src.database import SessionLocal, init_db, User, ImageRegistry
 from src.utils import load_image, save_image, binary_to_text, compute_dhash, calculate_hamming_distance
 from src.core import embed_watermark, extract_watermark
+
+# Standard library utilities
 import shutil, os, uuid, numpy as np, secrets
+
+# Image processing (PIL/Pillow)
 from PIL import Image, ImageFilter
+
+# Secure token signing and validation
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+# Initialize FastAPI application
 app = FastAPI()
 
 # ============================================================
 # SECURITY HEADERS MIDDLEWARE
 # ============================================================
-
+# Middleware to add security headers to every HTTP response
+# Prevents clickjacking, MIME-type sniffing, XSS, and enforces HTTPS
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
+    # Prevent embedding in iframes (clickjacking protection)
     response.headers["X-Frame-Options"] = "DENY"
+    # Prevent browsers from sniffing MIME type (e.g., executing JS in CSS)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    # Control referrer information sent to external sites
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Disable dangerous browser features (camera, mic, geolocation)
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # Force HTTPS for one year (including subdomains)
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Content Security Policy: restrict resource loading to same-origin + CDNs
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://code.jquery.com; "
@@ -41,55 +67,114 @@ async def add_security_headers(request, call_next):
 # ============================================================
 # 1. SECURITY SETUP
 # ============================================================
+# Configuration for authentication, authorization, and encryption
 
-# App secret for signing cookies (load from env, or generate random for dev)
+# Cookie signing secret: prevents cookie tampering
+# Loaded from env var or randomly generated for development
 APP_SECRET = os.environ.get("NEUROSTAMP_APP_SECRET", secrets.token_hex(32))
 COOKIE_SIGNER = URLSafeTimedSerializer(APP_SECRET)
 
-# Admin users (comma-separated usernames from env, or empty = first user)
+# Admin users list: comma-separated usernames with admin access
+# If empty, no admin restrictions applied (for development)
 ADMIN_USERS = [u.strip() for u in os.environ.get("NEUROSTAMP_ADMIN_USERS", "").split(",") if u.strip()]
 
-# Secure cookie flag (set to "true" in production behind HTTPS)
+# Secure cookie flag: set to "true" only in production with HTTPS
+# When false, cookies sent over HTTP; when true, only sent over HTTPS
 SECURE_COOKIES = os.environ.get("NEUROSTAMP_SECURE_COOKIES", "false").lower() == "true"
 
-# Watermark embedding strength (alpha).
-# A single constant ensures embed and extract always use the same threshold.
-# Decision rule: bit=1 when (S[0]_current - S[0]_original) > WATERMARK_ALPHA/2
-# Range guidance: 50–80 balances robustness vs. PSNR. Keep at 70 unless re-tuning.
+# Watermark embedding strength (SVD coefficients scaling factor)
+# Decision rule: bit is "1" when (S[0]_current - S[0]_original) > WATERMARK_ALPHA/2
+# Typical range: 50–80. Higher = more robust but lower PSNR; lower = smaller changes but less robust
+# Must match during both embedding and extraction for correct threshold detection
 WATERMARK_ALPHA = 70
 
-# Upload limits
+# Upload size and format restrictions
 MAX_UPLOAD_BYTES = int(os.environ.get("NEUROSTAMP_MAX_UPLOAD_MB", "20")) * 1024 * 1024
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
-Image.MAX_IMAGE_PIXELS = 89_000_000  # ~9400x9400, prevents decompression bombs
+# Prevent decompression bomb attacks (e.g., tiny PNG that expands to huge size)
+Image.MAX_IMAGE_PIXELS = 89_000_000  # ~9400x9400 pixels
 
+# ============================================================
+# PASSWORD HASHING & VERIFICATION UTILITIES
+# ============================================================
+# Using bcrypt for secure password storage and verification
+# (never store plain-text passwords)
 
 def get_password_hash(password: str) -> str:
-    """Hash password using bcrypt"""
+    """Hash a plain-text password using bcrypt with salt.
+    
+    Args:
+        password: Plain-text password from user input
+    
+    Returns:
+        bcrypt-hashed password string (safe to store in database)
+    """
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Verify password against bcrypt hash"""
+    """Verify a plain-text password against a bcrypt hash.
+    
+    Args:
+        plain: Plain-text password from login attempt
+        hashed: bcrypt hash from database
+    
+    Returns:
+        True if password matches hash; False otherwise
+    """
     return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
 
 
 # ============================================================
 # 2. SIGNED SESSION HELPERS
 # ============================================================
+# Session management using cryptographically signed tokens
+# Prevents session tampering and forgery attacks
 
 def sign_session(username: str) -> str:
-    """Create a signed session token for the given username."""
+    """Create a cryptographically signed session token.
+    
+    The token is signed with APP_SECRET, so it cannot be forged
+    without knowing the secret. The username is embedded in the token
+    and can be recovered by verify_session().
+    
+    Args:
+        username: The authenticated username
+    
+    Returns:
+        URL-safe signed token string (safe to use as cookie value)
+    """
     return COOKIE_SIGNER.dumps(username, salt="user-session")
 
 def verify_session(token: str, max_age: int = 86400) -> str | None:
-    """Verify a signed session token. Returns username or None."""
+    """Verify and decode a signed session token.
+    
+    Ensures the token was signed with APP_SECRET and has not expired.
+    If valid, returns the embedded username. If invalid/expired, returns None.
+    
+    Args:
+        token: The signed token string (from cookie)
+        max_age: Maximum age of token in seconds (default 24 hours)
+    
+    Returns:
+        Username if token is valid; None if tampered or expired
+    """
     try:
         return COOKIE_SIGNER.loads(token, salt="user-session", max_age=max_age)
     except (BadSignature, SignatureExpired):
         return None
 
 def get_session_user(request: Request) -> str | None:
-    """Extract and verify the logged-in username from the request cookie."""
+    """Extract and verify the logged-in username from the request cookies.
+    
+    Reads the "user_session" cookie, verifies its signature, and returns
+    the username if valid. Used to protect routes that require authentication.
+    
+    Args:
+        request: FastAPI request object (contains cookies)
+    
+    Returns:
+        Username if session is valid; None if missing or invalid
+    """
     token = request.cookies.get("user_session")
     if not token:
         return None
@@ -99,18 +184,36 @@ def get_session_user(request: Request) -> str | None:
 # ============================================================
 # 3. CSRF PROTECTION (Double-Submit Cookie)
 # ============================================================
+# CSRF (Cross-Site Request Forgery) prevention using double-submit tokens
+# Frontend generates a token, includes it in form submissions;
+# backend verifies it matches the token in cookies
 
 def generate_csrf_token() -> str:
-    """Generate a cryptographically random CSRF token."""
+    """Generate a new CSRF protection token.
+    
+    Uses cryptographically random hex string. One token per session.
+    Client-side JS reads from cookie and must include in form submissions.
+    
+    Returns:
+        Random 64-character hex string (32 bytes)
+    """
     return secrets.token_hex(32)
 
 def validate_csrf(request: Request, csrf_token: str = Form(None)):
-    """
-    Validate CSRF token from form field against the cookie.
-    The csrf_token cookie is non-httponly so the frontend JS can read it.
-    The form must include a matching csrf_token hidden field.
+    """Validate CSRF token from form against cookie.
+    
+    Both the cookie and form field must contain matching tokens.
+    Comparison uses constant-time comparison to prevent timing attacks.
+    
+    Args:
+        request: FastAPI request (contains cookies)
+        csrf_token: Token from form submission (POST parameter)
+    
+    Raises:
+        HTTPException with status 403 if validation fails
     """
     cookie_token = request.cookies.get("csrf_token")
+    # Token must exist in both places and match exactly
     if not cookie_token or not csrf_token or not secrets.compare_digest(cookie_token, csrf_token):
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
@@ -118,16 +221,27 @@ def validate_csrf(request: Request, csrf_token: str = Form(None)):
 # ============================================================
 # 4. UPLOAD VALIDATION
 # ============================================================
+# Multi-layer validation for file uploads to prevent attacks
+# (malicious files, oversized files, file type bypass)
 
 async def validate_upload(file: UploadFile) -> bytes:
+    """Validate an uploaded file before processing.
+    
+    Performs three security checks:
+    1. File extension must be in ALLOWED_EXTENSIONS (allowlist)
+    2. File size must not exceed MAX_UPLOAD_BYTES
+    3. PIL can actually open the file (detects corrupted/fake images)
+    
+    Args:
+        file: FastAPI UploadFile object
+    
+    Returns:
+        File contents as bytes if all checks pass
+    
+    Raises:
+        HTTPException with status 400 or 413 if validation fails
     """
-    Validate an uploaded file:
-    - Extension allowlist
-    - File size limit
-    - PIL can actually open it (rejects malformed / non-image payloads)
-    Returns the file bytes if valid.
-    """
-    # Check extension
+    # CHECK 1: Verify file extension is allowed
     _, ext = os.path.splitext(file.filename or "")
     if ext.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -135,7 +249,7 @@ async def validate_upload(file: UploadFile) -> bytes:
             detail=f"File type '{ext}' not allowed. Accepted: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
     
-    # Read and check size
+    # CHECK 2: Read and verify file size
     contents = await file.read()
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -143,80 +257,133 @@ async def validate_upload(file: UploadFile) -> bytes:
             detail=f"File too large ({len(contents) // (1024*1024)}MB). Max: {MAX_UPLOAD_BYTES // (1024*1024)}MB"
         )
     
-    # Verify it's a valid image PIL can open
+    # CHECK 3: Verify the file is a valid, uncorrupted image
+    # PIL will raise exception if file is not a valid image or is corrupted
     import io
     try:
         img = Image.open(io.BytesIO(contents))
-        img.verify()  # verify() checks for corrupted data
+        img.verify()  # verify() scans for file corruption
     except Exception:
         raise HTTPException(status_code=400, detail="File is not a valid image or is corrupted")
     
-    # Reset file position for downstream consumers
+    # Reset file pointer for downstream consumers to read from beginning
     await file.seek(0)
     return contents
 
 
 # ============================================================
-# 5. APP SETUP
+# 5. APP SETUP & INITIALIZATION
 # ============================================================
+# Set up static files, template engine, and database
 
+# Create uploads directory if it doesn't exist (for storing watermarked images)
 os.makedirs("static/uploads", exist_ok=True)
+
+# Mount static file directory (CSS, JS, images) at /static path
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Set up Jinja2 template engine (for HTML rendering)
 templates = Jinja2Templates(directory="templates")
-# Disable Jinja2's template caching to avoid `TypeError: cannot use 'tuple' as a dict key` on some platforms
-# (some combinations of Jinja2/Starlette pass dicts into the template cache key which may be unhashable).
-# Setting cache_size=0 forces no caching and prevents the error in runtime environments like Render/HF Spaces.
+# Disable Jinja2's template caching to avoid TypeError on some platforms
+# (some combinations of Jinja2/Starlette pass unhashable types as cache keys)
+# Setting cache_size=0 forces re-parsing templates on every request (safe for development)
 templates.env.cache_size = 0
+
+# Initialize database (create tables if they don't exist)
 init_db()
 
 # Debug: print which DATABASE_URL the app is using at startup
+# Helps diagnose database configuration issues in logs
 from src.database import DATABASE_URL as _DB_URL
 print(f"DEBUG - Using DATABASE_URL={_DB_URL}")
 
+# ============================================================
+# UTILITY FUNCTIONS
+# ============================================================
+
 def get_secure_filename(filename: str) -> str:
+    """Generate a secure filename for uploaded files.
+    
+    Prevents directory traversal attacks (e.g., "../etc/passwd")
+    by using a UUID prefix and sanitizing the original filename.
+    
+    Args:
+        filename: Original filename from upload
+    
+    Returns:
+        Secure filename like "a1b2c3d4_original_image.jpg"
     """
-    Generates a secure filename by prepending a UUID and sanitizing the original name.
-    """
-    base = os.path.basename(filename)
-    # Simple sanitization: keep only alphanumeric, dots, dashes, underscores
+    base = os.path.basename(filename)  # Remove any path separators
+    # Keep only safe characters (alphanumeric, dots, dashes, underscores)
     clean_base = "".join(c for c in base if c.isalnum() or c in "._-")
+    # Prepend random UUID to make filename unique and prevent collisions
     return f"{uuid.uuid4().hex[:8]}_{clean_base}"
 
-# FIX: Proper indentation for database session
 def get_db():
+    """FastAPI dependency: Get a database session.
+    
+    Creates a new SQLAlchemy session for this request and ensures
+    it's properly closed after the request completes (even if an error occurs).
+    
+    Yields:
+        SQLAlchemy Session object (used by route handlers via Depends(get_db))
+    """
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-
 # ============================================================
-# HELPER: Set secure cookie with proper flags
+# COOKIE MANAGEMENT HELPER
 # ============================================================
 
 def set_secure_cookie(response: Response, key: str, value: str, httponly: bool = True):
-    """Set a cookie with proper security flags."""
+    """Set an HTTP cookie with proper security flags.
+    
+    Applies industry best practices for cookie security:
+    - httponly: Prevents JS from reading cookie (default True)
+    - samesite: Prevents CSRF attacks (always "Lax")
+    - secure: Only sent over HTTPS in production (depends on SECURE_COOKIES setting)
+    - max_age: Cookie expires after 24 hours
+    
+    Args:
+        response: FastAPI Response object to modify
+        key: Cookie name (e.g., "user_session")
+        value: Cookie value (should be signed/encrypted)
+        httponly: If True, JS cannot access cookie (default True for security)
+    """
     response.set_cookie(
         key=key,
         value=value,
         httponly=httponly,
-        samesite="Lax",
-        secure=SECURE_COOKIES,
+        samesite="Lax",  # Allows same-site requests with top-level navigation
+        secure=SECURE_COOKIES,  # Only HTTPS in production
         max_age=86400,  # 24 hours
     )
 
 
 # ============================================================
-# AUTH ROUTES
+# AUTHENTICATION ROUTES
 # ============================================================
+# Public routes for user login, registration, and logout
 
 @app.get("/", response_class=HTMLResponse)
 async def login_page(request: Request):
+    """Serve the login/registration page.
+    
+    This is the public entry point. No authentication required.
+    Redirects to /dashboard if user is already logged in (client-side)
+    """
     return templates.TemplateResponse("login.html", {"request": request})
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    """Serve the main dashboard (watermarking interface).
+    
+    Requires valid session cookie. Redirects to login if not authenticated.
+    Generates a new CSRF token for form submissions.
+    """
     username = get_session_user(request)
     if not username:
         return RedirectResponse(url="/")
@@ -226,7 +393,7 @@ async def dashboard(request: Request):
         "username": username,
         "csrf_token": csrf_token,
     })
-    # Set CSRF cookie (non-httponly so JS can read it)
+    # Set CSRF cookie (non-httponly so client-side JS can read it)
     set_secure_cookie(response, "csrf_token", csrf_token, httponly=False)
     return response
 
@@ -237,16 +404,40 @@ async def register(
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    """Register a new user account.
+    
+    Args:
+        username: Desired username (must be unique)
+        password: Plain-text password (will be hashed)
+        db: Database session (injected by FastAPI)
+    
+    Returns:
+        JSON with status and new user's unique ID (user_uid)
+        or error message if user already exists or DB error occurs
+    """
+    # Check if username already exists
     if db.query(User).filter(User.username == username).first():
         return JSONResponse({"status": "error", "message": "User exists!"})
-    new_user = User(username=username, hashed_password=get_password_hash(password), user_uid=str(uuid.uuid4())[:12])
+    
+    # Create new user with hashed password and unique user_uid
+    new_user = User(
+        username=username,
+        hashed_password=get_password_hash(password),
+        user_uid=str(uuid.uuid4())[:12]  # Short unique ID for watermark embedding
+    )
     db.add(new_user)
+    
+    # Commit to database with error handling
     try:
         db.commit()
     except Exception as e:
-        db.rollback()
+        db.rollback()  # Rollback on any DB error
         print(f"DB Error during register for user {username}: {e}")
-        return JSONResponse({"status": "error", "message": "Database error during registration."}, status_code=500)
+        return JSONResponse(
+            {"status": "error", "message": "Database error during registration."},
+            status_code=500
+        )
+    
     return JSONResponse({"status": "success", "message": f"ID: {new_user.user_uid}"})
 
 @app.post("/login")
@@ -256,17 +447,42 @@ async def login(
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
-        return JSONResponse({"status": "error", "message": "Invalid Credentials"}, status_code=401)
+    """Authenticate user and create session cookie.
     
+    Args:
+        username: Username to authenticate
+        password: Plain-text password to verify
+        response: FastAPI Response (will set cookie)
+        db: Database session (injected by FastAPI)
+    
+    Returns:
+        JSON with {"status": "success"} and user_session cookie set
+        or error message if credentials invalid
+    """
+    # Look up user in database
+    user = db.query(User).filter(User.username == username).first()
+    
+    # Verify user exists and password matches
+    if not user or not verify_password(password, user.hashed_password):
+        return JSONResponse(
+            {"status": "error", "message": "Invalid Credentials"},
+            status_code=401
+        )
+    
+    # Create response with success message
     resp = JSONResponse({"status": "success"})
-    # Signed session cookie — can't be forged without APP_SECRET
+    
+    # Set signed session cookie (cannot be forged without APP_SECRET)
     set_secure_cookie(resp, "user_session", sign_session(username))
+    
     return resp
 
 @app.get("/logout")
 async def logout():
+    """Clear session and CSRF cookies, redirect to login.
+    
+    Doesn't require authentication (safe endpoint).
+    """
     resp = RedirectResponse(url="/")
     resp.delete_cookie("user_session")
     resp.delete_cookie("csrf_token")
@@ -276,6 +492,7 @@ async def logout():
 # ============================================================
 # CORE ROUTES
 # ============================================================
+# These routes implement the core watermarking functionality
 
 @app.post("/stamp")
 async def stamp_image(
@@ -284,38 +501,60 @@ async def stamp_image(
     csrf_token: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    # Derive identity from signed session — never trust client-sent username
+    """Embed digital watermark into an image.
+    
+    Workflow:
+    1. Authenticate user via session cookie
+    2. Validate uploaded image (size, format, corruption)
+    3. Check for copyright conflicts (double-spending attack)
+    4. Embed watermark using DWT-SVD algorithm
+    5. Register image hash in global registry
+    6. Return watermarked image for download
+    
+    Args:
+        file: Image file to watermark
+        csrf_token: CSRF protection token
+        db: Database session
+    
+    Returns:
+        JSON with download URL for watermarked image
+    """
+    # Derive username from signed session (never trust client-sent username)
     username = get_session_user(request)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # CSRF check
+    # CSRF validation (prevents cross-site attacks)
     validate_csrf(request, csrf_token)
     
-    # Validate uploaded file
+    # Multi-layer file validation
     file_bytes = await validate_upload(file)
     
+    # Look up user in database
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User error. Relogin.")
 
-    # Save & Load
+    # Save uploaded image to temporary location
     secure_name = get_secure_filename(file.filename)
     path = f"static/uploads/{secure_name}"
     with open(path, "wb") as f:
         f.write(file_bytes)
     original = load_image(path)
     
-    # Double Spending Check — try exact match first, then bounded hamming scan
+    # ============================================================
+    # DOUBLE-SPENDING ATTACK PREVENTION
+    # ============================================================
+    # Check if this image (or a perceptually similar one) was already watermarked by someone else
     img_hash = compute_dhash(original)
     
-    # Fast path: exact match
+    # Fast path: exact hash match
     exact = db.query(ImageRegistry).filter_by(image_hash=img_hash).first()
     if exact and exact.owner_uid != user.user_uid:
         owner = db.query(User).filter(User.user_uid == exact.owner_uid).first()
         return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
     
-    # Slow path: perceptual scan (bounded to prevent DoS)
+    # Slow path: bounded perceptual scan (handles similar images, prevents DoS)
     if not exact:
         SCAN_LIMIT = 5000
         for r in db.query(ImageRegistry).limit(SCAN_LIMIT).all():
@@ -323,11 +562,19 @@ async def stamp_image(
                 owner = db.query(User).filter(User.user_uid == r.owner_uid).first()
                 return {"status": "error", "error": f"Conflict: Owned by {owner.username if owner else 'Unknown'}"}
 
-    # Embed
+    # ============================================================
+    # WATERMARK EMBEDDING
+    # ============================================================
+    # Embed user's ID into image using DWT-SVD algorithm
     watermarked, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
+    
+    # Store the embedding key (encrypted) for later extraction
     user.set_key_data(key)
     
-    # Register
+    # ============================================================
+    # COPYRIGHT REGISTRY
+    # ============================================================
+    # Register this image in the global copyright registry (prevent double-stamping)
     if not db.query(ImageRegistry).filter_by(image_hash=img_hash).first():
         h, w, c = original.shape
         db.add(ImageRegistry(
@@ -338,7 +585,7 @@ async def stamp_image(
         ))
     db.commit()
     
-    # Save Output
+    # Save watermarked image and return download URL
     out_name = f"stamped_{secure_name}"
     save_image(watermarked, f"static/uploads/{out_name}")
     return {"status": "success", "download_url": f"/static/uploads/{out_name}"}
