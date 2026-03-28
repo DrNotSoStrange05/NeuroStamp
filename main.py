@@ -596,51 +596,96 @@ async def verify(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    # Validate uploaded file
+    """Verify and extract watermark from an image to identify copyright owner.
+    
+    Workflow:
+    1. Validate uploaded image file
+    2. Compute perceptual hash (dHash) of the image
+    3. Search copyright registry for exact or similar matches (bounded scan)
+    4. If found, extract the watermark using the owner's embedding key
+    5. Compare extracted ID with expected ID (with tolerance for damage)
+    6. Return copyright owner information and match status
+    
+    This route enables anonymous copyright verification without authentication.
+    Allows for robustness against image transformations (crop, resize, JPEG, etc.)
+    up to a 22-bit difference in perceptual hash.
+    
+    Args:
+        file: Suspect image file to verify
+        db: Database session
+    
+    Returns:
+        JSON with status, extracted text, match result, and owner name
+    """
+    # ============================================================
+    # STEP 1: FILE VALIDATION & LOADING
+    # ============================================================
+    # Validate uploaded file (extension, size, corruption)
     file_bytes = await validate_upload(file)
     
-    # 1. Save uploaded file securely
+    # Save suspected image securely with unique filename
     secure_name = get_secure_filename(file.filename)
     path = f"static/uploads/verify_{secure_name}"
     with open(path, "wb") as f:
         f.write(file_bytes)
     
-    # 2. Load the suspected image
+    # Load image as NumPy array for processing
     suspect_img_arr = load_image(path)
     
-    # 3. Autonomous Pirate Detection (dHash Search)
+    # ============================================================
+    # STEP 2-3: AUTONOMOUS PIRATE DETECTION (dHash Search)
+    # ============================================================
+    # Compute perceptual hash (difference hash) of suspected image
+    # dHash is robust to scaling, rotation, and compression
     suspect_hash = compute_dhash(suspect_img_arr)
     
     matched_registry = None
     min_dist = 100
     
-    # Fast path: exact match first
+    # Fast path: check for exact hash match first (most common case)
     exact = db.query(ImageRegistry).filter_by(image_hash=suspect_hash).first()
     if exact:
         matched_registry = exact
         min_dist = 0
     else:
-        # Bounded perceptual scan
-        SCAN_LIMIT = 5000
+        # Slow path: bounded perceptual scan (prevents DoS, handles similar images)
+        # 22-bit tolerance for dHash handles:
+        #   - Screenshot/rendering artifacts
+        #   - Slight compression variations
+        #   - Minor color corrections
+        SCAN_LIMIT = 5000  # Only scan first 5000 registered images
         for r in db.query(ImageRegistry).limit(SCAN_LIMIT).all():
             dist = calculate_hamming_distance(suspect_hash, r.image_hash)
-            if dist < 22 and dist < min_dist: # 22 bit tolerance for dHash (handles crop/scale/screenshot attacks)
+            # Update best match if this is closer and within tolerance
+            if dist < 22 and dist < min_dist:
                 min_dist = dist
                 matched_registry = r
             
     if not matched_registry:
-        return {"status": "error", "error": "No matching copyright found in the NeuroStamp Global Registry."}
+        return {
+            "status": "error",
+            "error": "No matching copyright found in the NeuroStamp Global Registry."
+        }
         
-    # 4. We found the owner! Load their profile.
+    # ============================================================
+    # STEP 4: RETRIEVE OWNER & EMBEDDING KEY
+    # ============================================================
+    # Look up the copyright owner from registry
     user = db.query(User).filter(User.user_uid == matched_registry.owner_uid).first()
-    if not user: return {"error": "Registry Corrupted: Owner UID missing."}
+    if not user:
+        return {"error": "Registry Corrupted: Owner UID missing."}
     
+    # Retrieve the owner's encryption key (needed to extract watermark)
     key = user.get_key_data()
-    if not key: return {"error": "User Key not found."}
+    if not key:
+        return {"error": "User Key not found."}
     
-    # 5. RECOVERY ALIGNMENT
-    # If the image was squashed by Instagram, we must resize it back to the mathematically
-    # expected DWT grid dimensions before extraction!
+    # ============================================================
+    # STEP 5: RECOVERY ALIGNMENT (Handle Image Transformations)
+    # ============================================================
+    # If the suspected image was resized/cropped/compressed,
+    # restore it to the original dimensions for correct DWT extraction.
+    # DWT is sensitive to image dimensions, so alignment is critical.
     orig_w = matched_registry.original_width
     orig_h = matched_registry.original_height
     
@@ -648,42 +693,64 @@ async def verify(
     if orig_w > 0 and orig_h > 0 and (w != orig_w or h != orig_h):
         print(f"   [ALIGNMENT] Restoring dimensions from {w}x{h} back to {orig_w}x{orig_h}")
         pil_img = Image.fromarray(suspect_img_arr)
+        # Use LANCZOS resampling (high-quality) to minimize watermark damage
         pil_img = pil_img.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
         suspect_img_arr = np.array(pil_img)
     
-    # 6. Extract the 120-bit Bipolar DCT Signature
-    # alpha MUST match WATERMARK_ALPHA used during embedding so the threshold is correct
-    text = extract_watermark(suspect_img_arr, key, WATERMARK_ALPHA, 120, user.username)
+    # ============================================================
+    # STEP 6: WATERMARK EXTRACTION
+    # ============================================================
+    # Extract the 120-bit watermark signature using DWT-SVD
+    # WATERMARK_ALPHA must match the value used during embedding
+    # for correct threshold detection during extraction
+    text = extract_watermark(
+        suspect_img_arr,
+        key,
+        WATERMARK_ALPHA,  # Embedding strength threshold
+        120,              # Watermark bit length
+        user.username
+    )
     print(f"DEBUG - Expected: 'ID:{user.user_uid}'")
     print(f"DEBUG - Extracted: '{text}'")
     
-    # 7. Signature Integrity Validation
+    # ============================================================
+    # STEP 7: SIGNATURE INTEGRITY VALIDATION
+    # ============================================================
+    # Validate extracted watermark against expected owner ID
+    # Allow up to 32 bits of error to handle:
+    #   - Screenshot pipeline artifacts
+    #   - JPG compression losses
+    #   - Screen rendering variations
     expected = f"ID:{user.user_uid}"
     
     from src.utils import text_to_binary
     
     is_match = False
     if text == expected:
+        # Perfect match (no corruption)
         is_match = True
     else:
+        # Partial match: convert both to binary and count differing bits
         bin_extracted = text_to_binary(text)
         bin_expected = text_to_binary(expected)
         
-        # Format padding
+        # Pad shorter binary string with zeros for fair comparison
         bin_extracted = bin_extracted.ljust(len(bin_expected), '0')[:len(bin_expected)]
         
+        # Count bit errors (Hamming distance at bit level)
         diff_bits = sum(1 for a, b in zip(bin_extracted, bin_expected) if a != b)
         print(f"DEBUG - Bits different: {diff_bits}")
         
-        # Allow up to 32 bits of damage to survive screenshot/rendering pipeline attacks
+        # Accept match if bit error rate is below tolerance (32 bits out of 120)
         if diff_bits <= 32:
             is_match = True
-            
+    
+    # Return copyright verification result
+    # Note: If match found, return corrected ID from database (more reliable than extraction)
     return {
-        "status": "complete", 
-        # If match found, show the corrected ID from the database (not the garbled raw extraction)
-        "extracted_text": expected if is_match else text, 
-        "is_match": is_match, 
+        "status": "complete",
+        "extracted_text": expected if is_match else text,
+        "is_match": is_match,
         "owner": user.username if is_match else "Unknown"
     }
 
@@ -694,57 +761,158 @@ async def attack(
     attack_type: str = Form(...),
     csrf_token: str = Form(None),
 ):
-    # Require session for attack sim
+    """Simulate various attacks on a watermarked image for robustness testing.
+    
+    This route is for educational and demonstration purposes. It applies
+    common image transformations that might be used to remove or damage watermarks:
+    - noise: Add Gaussian noise
+    - blur: Apply Gaussian blur
+    - jpeg: Compress as JPEG (quality 50%)
+    - rotate: Rotate 5 degrees
+    - crop: Crop 5% from each edge
+    - scale: Downscale by 50%
+    
+    After applying the attack, users can verify the watermark survives.
+    This demonstrates watermark robustness against real-world transformations.
+    
+    Args:
+        filename: Filename of uploaded image (from static/uploads)
+        attack_type: Type of attack to simulate
+        csrf_token: CSRF protection token
+    
+    Returns:
+        JSON with attacked image URL for download and verification
+    """
+    # Require authenticated session (prevent anonymous attacks)
     username = get_session_user(request)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # CSRF check
+    # CSRF validation (prevents cross-site attacks)
     validate_csrf(request, csrf_token)
     
-    # Sanitize filename (ensure just basename)
+    # ============================================================
+    # ATTACK SIMULATION SETUP
+    # ============================================================
+    # Sanitize filename to prevent directory traversal (../etc/passwd)
     safe_filename = os.path.basename(filename)
     path = f"static/uploads/{safe_filename}"
 
-    if not os.path.exists(path): return {"error": "File not found"}
+    # Verify file exists before processing
+    if not os.path.exists(path):
+        return {"error": "File not found"}
+    
+    # Load image in RGB mode (ensures consistent color format)
     img = Image.open(path).convert("RGB")
     
+    # ============================================================
+    # APPLY SELECTED ATTACK
+    # ============================================================
     if attack_type == "noise":
-        arr = np.array(img).astype(np.float32) + np.random.normal(0, 10, (img.size[1], img.size[0], 3))
+        # Add random Gaussian noise to each pixel
+        # Simulates: photography noise, compression artifacts
+        arr = np.array(img).astype(np.float32)
+        noise = np.random.normal(0, 10, arr.shape)  # Mean=0, StdDev=10
+        arr = arr + noise
         img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
-    elif attack_type == "blur": img = img.filter(ImageFilter.GaussianBlur(1))
-    elif attack_type == "jpeg": 
-        img.save(f"{path}.jpg", "JPEG", quality=50); img = Image.open(f"{path}.jpg")
-    elif attack_type == "rotate": img = img.rotate(5)
-    elif attack_type == "crop": img = img.crop((img.width*0.05, img.height*0.05, img.width*0.95, img.height*0.95))
-    elif attack_type == "scale":
-        w, h = img.size
-        # Keep the image physically smaller (50%) to demonstrate the attack visually
-        img = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
         
+    elif attack_type == "blur":
+        # Apply Gaussian blur (low-pass filter)
+        # Simulates: anti-aliasing, soft focus, screen rendering
+        img = img.filter(ImageFilter.GaussianBlur(1))
+        
+    elif attack_type == "jpeg":
+        # Compress as JPEG with quality=50 (lossy compression)
+        # Simulates: social media upload, messaging app, low-bandwidth scenarios
+        img.save(f"{path}.jpg", "JPEG", quality=50)
+        img = Image.open(f"{path}.jpg")
+        
+    elif attack_type == "rotate":
+        # Rotate image by 5 degrees
+        # Simulates: phone orientation, incorrect scanning, screenshot rotation
+        img = img.rotate(5)
+        
+    elif attack_type == "crop":
+        # Crop 5% from each edge (removes ~18% of pixel data)
+        # Simulates: manual cropping, framing, content cropping
+        img = img.crop((
+            img.width*0.05,
+            img.height*0.05,
+            img.width*0.95,
+            img.height*0.95
+        ))
+        
+    elif attack_type == "scale":
+        # Downscale to 50% then upscale back (introduces resampling artifacts)
+        # Simulates: thumbnail generation, screen resizing, aspect ratio changes
+        w, h = img.size
+        img = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+    
+    # ============================================================
+    # SAVE & RETURN ATTACKED IMAGE
+    # ============================================================
+    # Save attacked image with descriptive filename
     out = f"attacked_{attack_type}_{safe_filename}"
     img.save(f"static/uploads/{out}")
-    return {"status": "success", "attack_url": f"/static/uploads/{out}"}
+    
+    return {
+        "status": "success",
+        "attack_url": f"/static/uploads/{out}"
+    }
 
 
 # ============================================================
 # ADMIN ROUTES — Requires authenticated session
 # ============================================================
+# Protected routes for database inspection (admin only)
 
 @app.get("/db-viewer", response_class=HTMLResponse)
 async def view_database(request: Request, db: Session = Depends(get_db)):
-    # Require valid session
+    """Display the NeuroStamp database in a styled HTML table.
+    
+    Shows:
+    - All registered users and their unique IDs
+    - Copyright registry (all watermarked images and owners)
+    
+    Authentication: Requires valid session cookie
+    Authorization: Requires username in NEUROSTAMP_ADMIN_USERS env var
+    (if ADMIN_USERS is empty, no admin access is allowed)
+    
+    Security notes:
+    - Does NOT display password hashes or encrypted keys (for safety)
+    - Only shows whether user has a watermark key stored
+    - Styled with dark theme for security context
+    
+    Args:
+        request: FastAPI request (checked for session cookie)
+        db: Database session
+    
+    Returns:
+        HTML page with two tables (users and copyright registry)
+    """
+    # ============================================================
+    # AUTHENTICATION & AUTHORIZATION
+    # ============================================================
+    # Extract and verify session token
     username = get_session_user(request)
     if not username:
         return RedirectResponse(url="/")
     
-    # Admin check: block access unless ADMIN_USERS is configured AND the user is in the list
+    # Check admin authorization: must be in ADMIN_USERS list
+    # If ADMIN_USERS is empty, no one gets admin access (secure default)
     if not ADMIN_USERS or username not in ADMIN_USERS:
         raise HTTPException(status_code=403, detail="Admin access required")
     
+    # ============================================================
+    # FETCH DATABASE DATA
+    # ============================================================
+    # Query all users and copyright registry entries
     users = db.query(User).all()
     registry = db.query(ImageRegistry).all()
     
+    # ============================================================
+    # BUILD HTML RESPONSE
+    # ============================================================
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -754,6 +922,7 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
         <style>
+            /* Dark theme for security context */
             body { background-color: #050505; color: #00ff9d; font-family: 'JetBrains Mono', monospace; }
             .card { background: rgba(20, 20, 20, 0.8); border: 1px solid #333; }
             .card-header { background: #111; border-bottom: 1px solid #333; color: #fff; font-weight: bold; }
@@ -788,8 +957,10 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
                         <tbody>
     """
     
+    # Populate users table
     for u in users:
         # SECURITY: Do NOT expose password hashes or encrypted key data
+        # Only show whether key exists (boolean flag)
         has_key = "✅ YES" if u.encrypted_key_data else "❌ NO"
         html_content += f"""
             <tr>
@@ -820,6 +991,7 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
                         <tbody>
     """
     
+    # Populate copyright registry table
     for r in registry:
         html_content += f"""
             <tr>
@@ -848,21 +1020,43 @@ async def view_database(request: Request, db: Session = Depends(get_db)):
 # ============================================================
 # VISUALIZATION ENGINE ENDPOINTS
 # ============================================================
+# Routes for visualizing DWT, SVD, and watermark difference maps
 
 @app.get("/visualize", response_class=HTMLResponse)
 async def visualize_page(request: Request):
+    """Serve the visualization engine page.
+    
+    This page allows users to upload an image and see detailed visualizations
+    of the DWT (Discrete Wavelet Transform), SVD (Singular Value Decomposition),
+    and difference maps showing how the watermark modifies the image.
+    
+    Educational tool for understanding the watermarking algorithm.
+    
+    Requirements: Authenticated session (checks for user_session cookie)
+    
+    Args:
+        request: FastAPI request
+    
+    Returns:
+        HTML page for visualization interface
+    """
+    # Require authentication
     username = get_session_user(request)
     if not username:
         return RedirectResponse(url="/")
+    
+    # Generate new CSRF token for form submissions
     csrf_token = generate_csrf_token()
     response = templates.TemplateResponse("visualize.html", {
         "request": request,
         "username": username,
         "csrf_token": csrf_token,
     })
+    # Set CSRF cookie (non-httponly so client JS can read it)
     set_secure_cookie(response, "csrf_token", csrf_token, httponly=False)
     return response
 
+# Import visualization generation functions
 from src.visualizer import generate_visualizations, generate_diff_map
 
 @app.post("/process-vis", response_class=HTMLResponse)
@@ -872,52 +1066,112 @@ async def process_visualization(
     csrf_token: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    # Derive identity from session — not from form
+    """Process an image and generate DWT-SVD-Diff visualizations.
+    
+    Workflow:
+    1. Authenticate user and validate CSRF token
+    2. Validate uploaded image file
+    3. Generate watermarked version using the same algorithm as /stamp
+    4. Create visualization assets:
+       - DWT (Wavelet decomposition showing frequency bands)
+       - Grid (SVD coefficient grid showing where watermark is embedded)
+       - SVD (Singular value magnitudes)
+    5. Create difference map (original vs watermarked)
+    6. Return page with all visualizations embedded
+    
+    This is an educational tool to show users exactly where and how
+    their watermark is embedded in the frequency domain.
+    
+    Args:
+        file: Image file to process
+        csrf_token: CSRF protection token
+        db: Database session
+    
+    Returns:
+        HTML page with embedded visualization images
+    """
+    # ============================================================
+    # AUTHENTICATION & CSRF VALIDATION
+    # ============================================================
+    # Derive identity from session (never trust client)
     username = get_session_user(request)
     if not username:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # CSRF check
+    # Validate CSRF token (prevents cross-site attacks)
     validate_csrf(request, csrf_token)
     
-    # Validate uploaded file
+    # ============================================================
+    # FILE VALIDATION & LOADING
+    # ============================================================
+    # Multi-layer file validation
     file_bytes = await validate_upload(file)
     
-    # 1. Save Original
+    # Create visualization directory if it doesn't exist
     os.makedirs("static/vis", exist_ok=True)
+    
+    # Generate unique ID for this visualization session
     unique_id = uuid.uuid4().hex[:8]
+    
+    # Save original image with unique ID
     file_path = f"static/vis/demo_original_{unique_id}.jpg"
     with open(file_path, "wb") as f:
         f.write(file_bytes)
     
-    # 2. Generate Watermarked Version
+    # ============================================================
+    # WATERMARK GENERATION (using same algorithm as /stamp)
+    # ============================================================
+    # Load original image
     original = load_image(file_path)
+    
+    # Look up user in database
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found. Please re-login.")
-    wm_img, key = embed_watermark(original, f"ID:{user.user_uid}", WATERMARK_ALPHA, username)
     
+    # Embed watermark (same as /stamp route)
+    wm_img, key = embed_watermark(
+        original,
+        f"ID:{user.user_uid}",
+        WATERMARK_ALPHA,
+        username
+    )
+    
+    # Save watermarked image
     wm_path = file_path.replace("original", "watermarked")
     save_image(wm_img, wm_path)
     
-    # 3. Generate Visualizations (DWT, Grid, SVD)
+    # ============================================================
+    # VISUALIZATION GENERATION
+    # ============================================================
+    # Generate DWT, Grid, and SVD visualizations
+    # These show the frequency domain where the watermark lives
     vis_assets = generate_visualizations(file_path, "static/vis", unique_id)
     
-    # 4. Generate Diff Map
+    # Generate difference map (shows pixel-level changes)
+    # Allows user to see exactly which pixels were modified
     vis_diff = generate_diff_map(file_path, wm_path, "static/vis", unique_id)
     
+    # ============================================================
+    # RETURN RESULTS
+    # ============================================================
+    # Generate new CSRF token for next request
     new_csrf = generate_csrf_token()
+    
+    # Return visualization page with all assets embedded
     response = templates.TemplateResponse("visualize.html", {
         "request": request,
         "username": username,
         "csrf_token": new_csrf,
-        "processed": True,
+        "processed": True,  # Flag to show results
         "original_url": "/" + file_path,
         "watermarked_url": "/" + wm_path,
-        "vis_dwt": vis_assets["dwt"],
-        "vis_grid": vis_assets["grid"],
-        "vis_svd": vis_assets["svd"],
-        "vis_diff": vis_diff
+        "vis_dwt": vis_assets["dwt"],      # DWT decomposition
+        "vis_grid": vis_assets["grid"],    # SVD coefficient grid
+        "vis_svd": vis_assets["svd"],      # SVD magnitudes
+        "vis_diff": vis_diff               # Difference map
     })
+    
+    # Set new CSRF cookie
     set_secure_cookie(response, "csrf_token", new_csrf, httponly=False)
     return response
